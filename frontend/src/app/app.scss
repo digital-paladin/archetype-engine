@@ -1,0 +1,147 @@
+.xp-pulse {
+	animation: xpPulse 0.7s;
+}
+
+@keyframes xpPulse {
+	0% {
+		background: #e0ffe0;
+		color: #2e7d32;
+		box-shadow: 0 0 0 0 #a5d6a7;
+	}
+	50% {
+		background: #b2ffb2;
+		color: #388e3c;
+		box-shadow: 0 0 8px 2px #81c784;
+	}
+	100% {
+		background: inherit;
+		color: inherit;
+		box-shadow: none;
+	}
+}
+
+.xp-toast {
+	position: fixed;
+	top: 2rem;
+	right: 2rem;
+	background: #6a82fb;
+	color: #fff;
+	padding: 1rem 1.5rem;
+	border-radius: 0.75rem;
+	box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+	font-size: 1.1rem;
+	z-index: 1000;
+	opacity: 0.95;
+	animation: toastFadeIn 0.4s;
+}
+
+@keyframes toastFadeIn {
+	from { opacity: 0; transform: translateY(-20px); }
+	to { opacity: 0.95; transform: translateY(0); }
+}
+.xp-projection-stub {
+	display: flex;
+	align-items: center;
+	gap: 1.25rem;
+	background: #f3f6fa;
+	border-radius: 0.75rem;
+	box-shadow: 0 1px 6px rgba(0,0,0,0.04);
+	padding: 1.25rem 1.5rem;
+	margin-bottom: 2rem;
+}
+
+.xp-icon {
+	width: 32px;
+	height: 32px;
+	stroke: #6a82fb;
+}
+
+.xp-projection-info {
+	display: flex;
+	flex-direction: column;
+}
+
+.xp-projection-title {
+	font-size: 1.1rem;
+	font-weight: 600;
+	color: #222;
+}
+
+.xp-projection-value {
+	font-size: 1.35rem;
+	font-weight: 500;
+	color: #6a82fb;
+	margin-top: 0.15rem;
+}
+.dark-mode-toggle {
+	margin-left: auto;
+	background: rgba(255,255,255,0.13);
+	border: none;
+	border-radius: 50%;
+	width: 40px;
+	height: 40px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	cursor: pointer;
+	transition: background 0.18s;
+	color: #fff;
+	box-shadow: 0 1px 4px rgba(0,0,0,0.07);
+}
+
+.dark-mode-toggle:hover {
+	background: rgba(0,0,0,0.18);
+}
+
+.dark-icon {
+	width: 24px;
+	height: 24px;
+	stroke: #fff;
+}
+
+.dashboard-header {
+	display: flex;
+	align-items: center;
+	justify-content: flex-start;
+	gap: 1.5rem;
+}
+
+// Dashboard Shell Layout
+.dashboard-header {
+	width: 100%;
+	background: linear-gradient(90deg, #6a82fb 0%, #fc5c7d 100%);
+	color: #fff;
+	padding: 1.5rem 2rem;
+	font-size: 2rem;
+	font-weight: 600;
+	letter-spacing: 0.02em;
+	box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+	display: flex;
+	align-items: center;
+	justify-content: flex-start;
+}
+
+.dashboard-title {
+	font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+}
+
+.dashboard-main {
+	min-height: calc(100vh - 80px);
+	background: #f7f8fa;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	padding: 2rem 1rem;
+}
+
+.dashboard-content {
+	width: 100%;
+	max-width: 900px;
+	background: #fff;
+	border-radius: 1.25rem;
+	box-shadow: 0 2px 16px rgba(0,0,0,0.06);
+	padding: 2.5rem 2rem;
+	margin-top: 2rem;
+	font-size: 1.15rem;
+	color: #222;
+}

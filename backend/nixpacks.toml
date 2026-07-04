@@ -1,0 +1,8 @@
+# nixpacks.toml — Railway build configuration for digital-paladin backend
+# Ensures TypeScript is compiled on every deploy (no cached stale dist/)
+
+[phases.build]
+cmds = ["npm ci", "npm run build"]
+
+[start]
+cmd = "node dist/server.js"

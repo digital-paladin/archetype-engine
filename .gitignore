@@ -1,0 +1,91 @@
+# Dependencies
+node_modules/
+package-lock.json
+yarn.lock
+
+# Environment variables
+.env
+.env.local
+.env.production
+
+# Build outputs
+dist/
+build/
+.next/
+out/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE
+.vscode/
+.idea/
+.cursor/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# TypeScript
+*.tsbuildinfo
+
+# Testing
+coverage/
+.nyc_output/
+
+# Misc
+.cache/
+tmp/
+temp/
+
+# Personal data files — never commit to public repo
+backend/character-progression/character-sheet.md
+backend/character-progression/character-sheet.md.backup
+backend/character-progression/progression-report/
+backend/character-progression/archive/
+backend/character-progression/__pycache__/
+backend/character-progression/*.py
+
+# Personal patch/utility scripts in backend root
+backend/patch_daily_metrics.py
+backend/patch_journal_work.py
+backend/test-output.txt
+backend/test-response.json
+
+# Personal standalone test/debug scripts (use relative paths or env vars instead)
+backend/test-parser.js
+backend/test-quest.js
+backend/test_sleep_history.js
+frontend/patch_sleep_panel.js
+frontend/patch_sleep_panel.py
+frontend/patch_*.py
+frontend/patch_*.js
+
+# Compiled backend output — not needed in public repo
+backend/dist/
+backend/coverage/
+
+# Standalone dev/debug scripts (use env vars, not hardcoded paths)
+backend/test-*.ts
+backend/test-*.js
+backend/test-*.txt
+backend/test-*.json
+
+# Backup files
+**/*.bak
+
+# Frontend test output artifacts
+frontend/*.txt
+
+# Playwright credentials, sessions, and test artifacts
+frontend/e2e/.env.playwright
+frontend/e2e/.auth/
+frontend/test-results/
+frontend/playwright-report/

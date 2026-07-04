@@ -1,0 +1,440 @@
+// ── ESO Tier colour palette ───────────────────────────────────────────────────
+$legendary : #c0883d;   // gold
+$epic      : #9a5ccb;   // purple
+$superior  : #5299d6;   // blue
+$fine      : #4fac4e;   // green
+$normal    : #b0b0b0;   // grey/white
+
+// ── Tier border + glow mixins ─────────────────────────────────────────────────
+@mixin tier-style($color) {
+  border-color: $color;
+  .item-lore-name, .detail-lore-name, .detail-tier { color: $color; }
+  .item-icon, .detail-icon { text-shadow: 0 0 8px $color; }
+}
+
+// ── Panel shell ───────────────────────────────────────────────────────────────
+.consumables-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #1a1209;
+  color: #d4c4a0;
+  font-family: 'Fontin', 'Cinzel', Georgia, serif;
+  overflow: hidden;
+}
+
+// ── Header ────────────────────────────────────────────────────────────────────
+.panel-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 12px 16px 8px;
+  border-bottom: 1px solid #3a2e1a;
+}
+
+.panel-title {
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 3px;
+  color: #c9a84c;
+  text-transform: uppercase;
+}
+
+.panel-subtitle {
+  font-size: 0.7rem;
+  color: #7a6a4a;
+  letter-spacing: 1px;
+}
+
+// ── Filter bar ────────────────────────────────────────────────────────────────
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 8px 16px;
+  border-bottom: 1px solid #2a2010;
+}
+
+.filter-tab {
+  padding: 3px 12px;
+  background: transparent;
+  border: 1px solid #3a2e1a;
+  color: #7a6a4a;
+  font-size: 0.7rem;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.15s ease;
+
+  &:hover {
+    border-color: #c9a84c;
+    color: #c9a84c;
+  }
+
+  &.active {
+    background: #2a2010;
+    border-color: #c9a84c;
+    color: #c9a84c;
+  }
+}
+
+// ── Main layout ───────────────────────────────────────────────────────────────
+.consumables-layout {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+// ── Item grid (left) ──────────────────────────────────────────────────────────
+.item-grid {
+  flex: 0 0 55%;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-right: 1px solid #2a2010;
+
+  &::-webkit-scrollbar { width: 4px; }
+  &::-webkit-scrollbar-track { background: #1a1209; }
+  &::-webkit-scrollbar-thumb { background: #3a2e1a; border-radius: 2px; }
+}
+
+.item-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  background: #211809;
+  border: 1px solid #2a2010;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+
+  &:hover       { background: #2a2010; }
+  &.selected    { background: #2c2212; border-color: #c9a84c !important; }
+
+  // Tier borders
+  &.tier-legendary { @include tier-style($legendary); border-left: 3px solid $legendary; }
+  &.tier-epic      { @include tier-style($epic);      border-left: 3px solid $epic;      }
+  &.tier-superior  { @include tier-style($superior);  border-left: 3px solid $superior;  }
+  &.tier-fine      { @include tier-style($fine);      border-left: 3px solid $fine;      }
+  &.tier-normal    { @include tier-style($normal);    border-left: 3px solid $normal;    }
+}
+
+.item-icon {
+  font-size: 1.3rem;
+  flex-shrink: 0;
+  width: 26px;
+  text-align: center;
+}
+
+.item-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.item-lore-name {
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #d4c4a0;
+}
+
+.item-buff-type {
+  font-size: 0.64rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #7a6a4a;
+  margin-top: 2px;
+}
+
+.item-protein {
+  font-size: 0.7rem;
+  color: #8aaa66;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+// ── Detail pane (right) ───────────────────────────────────────────────────────
+.detail-pane {
+  flex: 0 0 45%;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  background: #1a1209;
+
+  &::-webkit-scrollbar { width: 4px; }
+  &::-webkit-scrollbar-track { background: #1a1209; }
+  &::-webkit-scrollbar-thumb { background: #3a2e1a; border-radius: 2px; }
+}
+
+.detail-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  color: #4a3e2a;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  text-align: center;
+  padding: 24px;
+}
+
+// ── Detail header bar ─────────────────────────────────────────────────────────
+.detail-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #2a2010;
+  background: #211809;
+
+  &.tier-legendary { border-bottom-color: rgba($legendary, 0.4); background: rgba($legendary, 0.06); }
+  &.tier-epic      { border-bottom-color: rgba($epic,      0.4); background: rgba($epic,      0.06); }
+  &.tier-superior  { border-bottom-color: rgba($superior,  0.4); background: rgba($superior,  0.06); }
+  &.tier-fine      { border-bottom-color: rgba($fine,      0.4); background: rgba($fine,      0.06); }
+  &.tier-normal    { border-bottom-color: rgba($normal,    0.3); background: rgba($normal,    0.04); }
+}
+
+.detail-icon {
+  font-size: 2rem;
+  flex-shrink: 0;
+}
+
+.detail-lore-name {
+  font-size: 0.9rem;
+  font-weight: 700;
+  line-height: 1.3;
+  color: #d4c4a0;
+}
+
+.detail-tier {
+  font-size: 0.65rem;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  margin-top: 3px;
+  opacity: 0.85;
+
+  .tier-legendary & { color: $legendary; }
+  .tier-epic      & { color: $epic;      }
+  .tier-superior  & { color: $superior;  }
+  .tier-fine      & { color: $fine;      }
+  .tier-normal    & { color: $normal;    }
+}
+
+// ── Detail body ───────────────────────────────────────────────────────────────
+.detail-body {
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.detail-description {
+  font-size: 0.75rem;
+  line-height: 1.65;
+  color: #8a7a5a;
+  font-style: italic;
+  margin: 0;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #2a2010;
+}
+
+// ── Stat rows ─────────────────────────────────────────────────────────────────
+.detail-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.stat-label {
+  font-size: 0.62rem;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: #5a4e2e;
+  flex-shrink: 0;
+}
+
+.stat-value {
+  font-size: 0.75rem;
+  color: #c4b490;
+  text-align: right;
+  flex: 1;
+
+  &.buff      { color: #8aaa66; }
+  &.real-food { color: #7a8a6a; font-style: italic; font-size: 0.68rem; }
+}
+
+// ── Consume button ────────────────────────────────────────────────────────────
+.consume-confirm {
+  margin-top: 8px;
+  padding: 6px 10px;
+  background: rgba(#c9a84c, 0.08);
+  border: 1px solid rgba(#c9a84c, 0.35);
+  color: rgba(#c9a84c, 0.90);
+  font-size: 0.70rem;
+  letter-spacing: 0.5px;
+  line-height: 1.4;
+  animation: consume-fade-in 0.2s ease;
+}
+
+@keyframes consume-fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.consume-btn {
+  align-self: stretch;
+  padding: 10px 14px;
+  background: transparent;
+  border: 1px solid #3a2e1a;
+  color: #c9a84c;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.15s ease;
+
+  &:hover {
+    background: rgba(#c9a84c, 0.08);
+    border-color: #c9a84c;
+  }
+
+  &.tier-legendary:hover { background: rgba($legendary, 0.12); border-color: $legendary; color: $legendary; }
+  &.tier-epic:hover      { background: rgba($epic,      0.12); border-color: $epic;      color: $epic;      }
+  &.tier-superior:hover  { background: rgba($superior,  0.12); border-color: $superior;  color: $superior;  }
+  &.tier-fine:hover      { background: rgba($fine,      0.12); border-color: $fine;      color: $fine;      }
+}
+
+// ── Fitbit Today food log panel ───────────────────────────────────────────────
+.fitbit-log-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  height: 100%;
+  padding: 2px 0;
+}
+
+.fl-entry {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(200,168,75,0.15);
+  border-radius: 6px;
+  padding: 8px 10px;
+
+  &.tier-legendary { border-color: rgba($legendary, 0.4); }
+  &.tier-epic      { border-color: rgba($epic,      0.4); }
+  &.tier-superior  { border-color: rgba($superior,  0.4); }
+  &.tier-fine      { border-color: rgba($fine,      0.4); }
+}
+
+.fl-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 3px;
+}
+
+.fl-meal-type {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: #665040;
+}
+
+.fl-match-badge { font-size: 11px; }
+
+.fl-name {
+  font-size: 0.79rem;
+  color: #d4c4a0;
+  margin-bottom: 4px;
+  line-height: 1.3;
+}
+
+.fl-macros {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: #777;
+}
+
+.fl-protein { color: $legendary; font-weight: 600; }
+.fl-dot     { color: #3a2e1a; }
+
+.fl-match-name {
+  font-size: 10px;
+  color: $fine;
+  font-style: italic;
+  margin-top: 4px;
+  opacity: 0.85;
+}
+
+.fl-loading,
+.fl-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  text-align: center;
+  color: #665040;
+  font-size: 0.82rem;
+  gap: 8px;
+}
+
+.fl-empty-hint {
+  font-size: 0.72rem;
+  color: #3a2e1a;
+}
+
+// ── Mobile (≤ 600 px) ─────────────────────────────────────────────────────────
+@media (max-width: 600px) {
+  // Stack item list above detail pane instead of side-by-side
+  .consumables-layout {
+    flex-direction: column;
+    overflow: visible;
+  }
+
+  .item-grid {
+    flex: 0 0 auto;
+    max-height: 240px;
+    border-right: none;
+    border-bottom: 1px solid #2a2010;
+  }
+
+  .detail-pane {
+    flex: 0 0 auto;
+    min-height: 180px;
+    max-height: 380px;
+  }
+
+  // Tighter filter tabs so they wrap cleanly on 393 px
+  .filter-bar {
+    padding: 6px 10px;
+    gap: 3px;
+  }
+  .filter-tab {
+    padding: 3px 9px;
+    font-size: 0.64rem;
+  }
+
+  // Header row: wrap subtitle below title
+  .panel-header {
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 10px 12px 6px;
+  }
+}
+
