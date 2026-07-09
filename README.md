@@ -72,7 +72,7 @@ This system occupies the gap: *you define the archetype, the system holds you ac
 ### Core System
 - **Skill trees with XP, leveling, and rust decay** — configurable class definitions, level thresholds, and XP formulas
 - **Sleep consolidation multiplier** — Fitbit sleep score → consolidation % → XP applied to character
-- **Action Commitment Matrix (ACM)** — 15 daily discipline checkboxes, weighted by resistance intensity
+- **Action Consequence Matrix (ACM)** — 15 daily discipline checkboxes, weighted by resistance intensity
 - **Streak tracking** — per-discipline streak counters with compound break warnings
 - **XP projections** — analytics and forward-looking level projection graphs
 
@@ -122,7 +122,7 @@ archetype-engine/
     └── src/app/
         ├── dashboard/          Root host, panel navigation, hotbar
         ├── character-panel/    Skill trees, level display, XP bars
-        ├── acm-panel/          Action Commitment Matrix
+        ├── acm-panel/          Action Consequence Matrix
         ├── quests-panel/       Daily quest log
         ├── sleep-panel/        Fitbit vitality + sleep debt
         ├── analytics/          XP history, projection charts
