@@ -762,8 +762,12 @@ export class DashboardComponent implements OnInit, OnDestroy {
   getDbClassStat(className: string): { level: number; currentXP: number; xpToNextLevel: number; percentToNext: number } | null {
     const trees = this.dbSkillTrees();
     if (!trees) return null;
-    const lower = className.toLowerCase();
-    return trees.find(t => t.name.toLowerCase() === lower) ?? null;
+    const lower = className.toLowerCase().replace(/[\s_-]/g, '');
+    return trees.find(t => {
+      const name = t.name.toLowerCase().replace(/[\s_-]/g, '');
+      // Exact or fuzzy (Redteamer ↔ RedTeamOperator ↔ redteamer)
+      return name === lower || name.includes(lower) || lower.includes(name);
+    }) ?? null;
   }
 
   setStress(level: string): void {

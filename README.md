@@ -209,7 +209,7 @@ See [`backend/.env.example`](./backend/.env.example) for the full reference with
 | `AUTH_USERNAME` | Yes | Dashboard login username |
 | `AUTH_PASSWORD` | Yes | Dashboard login password |
 | `OWNER_EMAIL` | Yes (scripts) | Your Supabase auth email — used by seed/migrate scripts |
-| `PLAYER_BIRTH_DATE` | No | `YYYY-MM-DD` — drives "Overall Level" age display |
+| `PLAYER_BIRTH_DATE` | No | `YYYY-MM-DD` — Overall Character Level = chronological age. Default / production: `1993-05-18` |
 | `FITBIT_CLIENT_ID` | No | Enables automatic sleep/nutrition sync |
 | `FITBIT_CLIENT_SECRET` | No | From [dev.fitbit.com](https://dev.fitbit.com) |
 | `TODOIST_API_TOKEN` | No | Enables AI task creation via Todoist |

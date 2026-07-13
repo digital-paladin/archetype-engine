@@ -1,5 +1,6 @@
 import { readFile } from 'fs/promises';
 import { CharacterData, SkillTree, VitalityData, PhaseInfo, Title, LockedTitle, TitleCollection, TitleRarity, RecoveryFactor, SleepDebtData, AcmMetrics, RpgStats, RpgLift, OverallLevelInfo, QuestLine, QuestChapter, GrandConvergence, GrandConvergenceCondition } from '../models/character.model';
+import { calculateOverallLevelInfo } from '../utils/overallLevel';
 
 export class CharacterParser {
   constructor(private filePath: string) {}
@@ -35,38 +36,7 @@ export class CharacterParser {
   }
 
   private calculateOverallLevelInfo(): OverallLevelInfo {
-    const birthDateStr = process.env.PLAYER_BIRTH_DATE || '1990-01-01';
-    const birthDate = new Date(`${birthDateStr}T00:00:00Z`);
-    const now = new Date();
-    
-    // Calculate current age
-    let age = now.getFullYear() - birthDate.getFullYear();
-    const hasHadBirthdayThisYear = (now.getMonth() > birthDate.getMonth()) || 
-        (now.getMonth() === birthDate.getMonth() && now.getDate() >= birthDate.getDate());
-    
-    if (!hasHadBirthdayThisYear) {
-      age--;
-    }
-
-    // Calculate next birthday
-    const [, birthMonth, birthDay] = birthDateStr.split('-');
-    const nextBirthdayYear = hasHadBirthdayThisYear ? now.getFullYear() + 1 : now.getFullYear();
-    const nextBirthday = new Date(`${nextBirthdayYear}-${birthMonth}-${birthDay}T00:00:00Z`);
-    
-    // Calculate days remaining
-    const diffTime = Math.abs(nextBirthday.getTime() - now.getTime());
-    const daysRemaining = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    
-    // Format date string gracefully (e.g., "May 18, 2026")
-    const dateOptions: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', year: 'numeric' };
-    const nextLevelDateStr = nextBirthday.toLocaleDateString('en-US', dateOptions);
-
-    return {
-      level: age,
-      nextLevel: age + 1,
-      nextLevelDate: nextLevelDateStr,
-      daysRemaining: daysRemaining
-    };
+    return calculateOverallLevelInfo();
   }
 
   private extractPhaseInfo(content: string): PhaseInfo {
