@@ -81,63 +81,104 @@ type LoginMode = 'login' | 'signup' | 'forgot' | 'magic';
         }
 
         @if (mode() === 'signup') {
-          <form (ngSubmit)="onSignup()" class="login-form">
-            <p class="mode-copy">
-              The System has detected a new Hunter. Set your birth date —
-              Overall Level is your chronological age.
-            </p>
+          <form (ngSubmit)="onSignupNext()" class="login-form">
+            @if (signupStep() === 1) {
+              <p class="mode-copy">
+                The System has detected a new Hunter. Set your birth date —
+                Overall Level is your chronological age.
+              </p>
 
-            <div class="form-group">
-              <label for="signup-email">Email</label>
-              <input
-                id="signup-email"
-                type="email"
-                [(ngModel)]="username"
-                name="signupEmail"
-                placeholder="you@example.com"
-                required
-                [disabled]="isBusy()"
-              />
-            </div>
+              <div class="form-group">
+                <label for="signup-email">Email</label>
+                <input
+                  id="signup-email"
+                  type="email"
+                  [(ngModel)]="username"
+                  name="signupEmail"
+                  placeholder="you@example.com"
+                  required
+                  [disabled]="isBusy()"
+                />
+              </div>
 
-            <div class="form-group">
-              <label for="signup-password">Password</label>
-              <input
-                id="signup-password"
-                type="password"
-                [(ngModel)]="password"
-                name="signupPassword"
-                placeholder="At least 8 characters"
-                required
-                minlength="8"
-                [disabled]="isBusy()"
-              />
-            </div>
+              <div class="form-group">
+                <label for="signup-password">Password</label>
+                <input
+                  id="signup-password"
+                  type="password"
+                  [(ngModel)]="password"
+                  name="signupPassword"
+                  placeholder="At least 8 characters"
+                  required
+                  minlength="8"
+                  [disabled]="isBusy()"
+                />
+              </div>
 
-            <div class="form-group">
-              <label for="signup-password2">Confirm password</label>
-              <input
-                id="signup-password2"
-                type="password"
-                [(ngModel)]="passwordConfirm"
-                name="signupPassword2"
-                placeholder="Repeat password"
-                required
-                [disabled]="isBusy()"
-              />
-            </div>
+              <div class="form-group">
+                <label for="signup-password2">Confirm password</label>
+                <input
+                  id="signup-password2"
+                  type="password"
+                  [(ngModel)]="passwordConfirm"
+                  name="signupPassword2"
+                  placeholder="Repeat password"
+                  required
+                  [disabled]="isBusy()"
+                />
+              </div>
 
-            <div class="form-group">
-              <label for="birth-date">Birth date</label>
-              <input
-                id="birth-date"
-                type="date"
-                [(ngModel)]="birthDate"
-                name="birthDate"
-                required
-                [disabled]="isBusy()"
-              />
-            </div>
+              <div class="form-group">
+                <label for="birth-date">Birth date</label>
+                <input
+                  id="birth-date"
+                  type="date"
+                  [(ngModel)]="birthDate"
+                  name="birthDate"
+                  required
+                  [disabled]="isBusy()"
+                />
+              </div>
+            } @else {
+              <p class="mode-copy" id="domain-step-copy">
+                Who do you want to become? Pick 3–5 life domains —
+                The System will suggest your class archetype.
+              </p>
+
+              <div class="domain-grid" id="domain-grid">
+                @for (d of domainOptions(); track d) {
+                  <label class="domain-chip" [class.selected]="selectedDomains.includes(d)">
+                    <input
+                      type="checkbox"
+                      [checked]="selectedDomains.includes(d)"
+                      (change)="toggleDomain(d, $event)"
+                      [disabled]="isBusy()"
+                    />
+                    <span>{{ d }}</span>
+                  </label>
+                }
+              </div>
+
+              @if (suggestedClass()) {
+                <p class="suggest-line" id="suggested-class">
+                  Suggested class: <strong>{{ suggestedClass()!.name }}</strong>
+                  — {{ suggestedClass()!.tagline }}
+                </p>
+              }
+
+              <div class="form-group">
+                <label for="class-display-name">Class display name</label>
+                <input
+                  id="class-display-name"
+                  type="text"
+                  [(ngModel)]="classDisplayName"
+                  name="classDisplayName"
+                  maxlength="48"
+                  placeholder="e.g. Iron Monk"
+                  [disabled]="isBusy()"
+                />
+              </div>
+            }
 
             @if (errorMessage()) {
               <div class="error-message">
@@ -152,14 +193,26 @@ type LoginMode = 'login' | 'signup' | 'forgot' | 'magic';
             <button
               type="submit"
               class="login-button"
-              [disabled]="!canSignup() || isBusy()"
+              [disabled]="!canSignupStep() || isBusy()"
             >
-              {{ isBusy() ? 'Creating…' : 'Begin journey' }}
+              @if (isBusy()) {
+                {{ signupStep() === 1 ? '…' : 'Creating…' }}
+              } @else if (signupStep() === 1) {
+                Continue
+              } @else {
+                Begin journey
+              }
             </button>
 
-            <button type="button" class="text-link back-link" (click)="setMode('login')">
-              ← Back to login
-            </button>
+            @if (signupStep() === 2) {
+              <button type="button" class="text-link back-link" (click)="signupStep.set(1)">
+                ← Back
+              </button>
+            } @else {
+              <button type="button" class="text-link back-link" (click)="setMode('login')">
+                ← Back to login
+              </button>
+            }
           </form>
         }
 
@@ -364,6 +417,37 @@ type LoginMode = 'login' | 'signup' | 'forgot' | 'magic';
     }
     .text-link:hover { color: #c9a84c; }
     .back-link { align-self: center; text-decoration: none; }
+
+    .domain-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      max-height: 220px;
+      overflow-y: auto;
+    }
+    .domain-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid rgba(110,82,28,0.45);
+      padding: 6px 10px;
+      color: #a08858;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .domain-chip.selected {
+      border-color: #c9a84c;
+      color: #f2c96a;
+      background: rgba(58,42,12,0.45);
+    }
+    .domain-chip input { accent-color: #c9a84c; }
+    .suggest-line {
+      color: #c9a84c;
+      font-size: 13px;
+      margin: 0;
+      line-height: 1.4;
+    }
+    .login-card { max-width: 520px; }
   `]
 })
 export class LoginComponent {
@@ -371,7 +455,12 @@ export class LoginComponent {
   password = '';
   passwordConfirm = '';
   birthDate = '';
+  classDisplayName = '';
+  selectedDomains: string[] = [];
   mode = signal<LoginMode>('login');
+  signupStep = signal<1 | 2>(1);
+  domainOptions = signal<string[]>([]);
+  suggestedClass = signal<{ id: string; name: string; tagline: string } | null>(null);
   isBusy = signal(false);
   errorMessage = signal('');
   successMessage = signal('');
@@ -383,17 +472,64 @@ export class LoginComponent {
 
   setMode(mode: LoginMode): void {
     this.mode.set(mode);
+    this.signupStep.set(1);
+    this.selectedDomains = [];
+    this.suggestedClass.set(null);
+    this.classDisplayName = '';
     this.errorMessage.set('');
     this.successMessage.set('');
+    if (mode === 'signup') {
+      void this.loadDomainOptions();
+    }
   }
 
-  canSignup(): boolean {
-    return (
-      !!this.username &&
-      this.password.length >= 8 &&
-      this.password === this.passwordConfirm &&
-      !!this.birthDate
-    );
+  async loadDomainOptions(): Promise<void> {
+    const res = await this.authService.getOnboardingOptions();
+    if (res.success && res.domains) {
+      this.domainOptions.set(res.domains);
+    }
+  }
+
+  canSignupStep(): boolean {
+    if (this.signupStep() === 1) {
+      return (
+        !!this.username &&
+        this.password.length >= 8 &&
+        this.password === this.passwordConfirm &&
+        !!this.birthDate
+      );
+    }
+    return this.selectedDomains.length >= 3 && this.selectedDomains.length <= 5;
+  }
+
+  toggleDomain(domain: string, event: Event): void {
+    const checked = (event.target as HTMLInputElement).checked;
+    if (checked) {
+      if (this.selectedDomains.length >= 5) {
+        (event.target as HTMLInputElement).checked = false;
+        this.errorMessage.set('Select at most 5 domains.');
+        return;
+      }
+      this.selectedDomains = [...this.selectedDomains, domain];
+    } else {
+      this.selectedDomains = this.selectedDomains.filter(d => d !== domain);
+    }
+    this.errorMessage.set('');
+    void this.refreshSuggestion();
+  }
+
+  async refreshSuggestion(): Promise<void> {
+    if (this.selectedDomains.length < 3) {
+      this.suggestedClass.set(null);
+      return;
+    }
+    const res = await this.authService.suggestClass(this.selectedDomains);
+    if (res.success && res.template) {
+      this.suggestedClass.set(res.template);
+      if (!this.classDisplayName) {
+        this.classDisplayName = res.template.name;
+      }
+    }
   }
 
   async onLogin(): Promise<void> {
@@ -415,22 +551,32 @@ export class LoginComponent {
     }
   }
 
-  async onSignup(): Promise<void> {
-    this.isBusy.set(true);
+  async onSignupNext(): Promise<void> {
     this.errorMessage.set('');
     this.successMessage.set('');
 
-    if (this.password !== this.passwordConfirm) {
-      this.errorMessage.set('Passwords do not match.');
-      this.isBusy.set(false);
+    if (this.signupStep() === 1) {
+      if (this.password !== this.passwordConfirm) {
+        this.errorMessage.set('Passwords do not match.');
+        return;
+      }
+      this.signupStep.set(2);
+      if (!this.domainOptions().length) {
+        await this.loadDomainOptions();
+      }
       return;
     }
 
+    this.isBusy.set(true);
     try {
       const result = await this.authService.signup(
         this.username,
         this.password,
-        this.birthDate
+        this.birthDate,
+        {
+          domains: this.selectedDomains,
+          classDisplayName: this.classDisplayName || undefined,
+        }
       );
       if (result.success && result.token) {
         this.router.navigate(['/dashboard']);

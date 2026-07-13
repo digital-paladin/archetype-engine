@@ -4,7 +4,13 @@ import { createClient } from '@supabase/supabase-js';
 import { getSupabaseAuth, getSupabaseAdmin } from '../lib/supabase';
 import { authMiddleware } from '../middleware/auth.middleware';
 import { getDataService } from '../services/data/dataService';
-import { isValidBirthDate, provisionNewUser } from '../services/onboarding.service';
+import { isValidBirthDate, provisionNewUser, resolveSignupIdentity } from '../services/onboarding.service';
+import {
+  CLASS_TEMPLATES,
+  LIFE_DOMAINS,
+  normalizeDomains,
+  suggestClassTemplate,
+} from '../services/classTemplates';
 
 const router = Router();
 
@@ -29,10 +35,35 @@ function getSupabaseClientForToken(accessToken: string) {
 }
 
 /**
+ * GET /api/auth/onboarding-options
+ * Public catalog for signup step 2 (domains + class templates).
+ */
+router.get('/onboarding-options', (_req: Request, res: Response) => {
+  res.json({
+    success: true,
+    domains: [...LIFE_DOMAINS],
+    templates: CLASS_TEMPLATES,
+    rules: { minDomains: 3, maxDomains: 5 },
+  });
+});
+
+/**
+ * POST /api/auth/suggest-class
+ * Body: { domains: string[] } → suggested template (deterministic).
+ */
+router.post('/suggest-class', (req: Request, res: Response) => {
+  const domains = normalizeDomains(req.body?.domains);
+  if (domains.length < 3 || domains.length > 5) {
+    return res.status(400).json({ success: false, error: 'select 3 to 5 life domains' });
+  }
+  const template = suggestClassTemplate(domains);
+  return res.json({ success: true, template, domains });
+});
+
+/**
  * POST /api/auth/signup
- * Thin SaaS onboarding: create Auth user + public.users (birth_date) + starter stats.
- * Uses service-role admin.createUser with email_confirm so demos work without inbox.
- * Body: { email, password, birthDate: YYYY-MM-DD }
+ * Thin SaaS onboarding + optional identity scaffold (domains → class template).
+ * Body: { email, password, birthDate, domains?: string[], classDisplayName?: string }
  */
 router.post('/signup', async (req: Request, res: Response) => {
   const { email, password, birthDate } = req.body ?? {};
@@ -50,13 +81,27 @@ router.post('/signup', async (req: Request, res: Response) => {
     });
   }
 
+  const identityResult = resolveSignupIdentity(req.body ?? {});
+  if (!identityResult.ok) {
+    return res.status(400).json({ success: false, error: identityResult.error });
+  }
+
   try {
     const admin = getSupabaseAdmin();
     const { data: created, error: createErr } = await admin.auth.admin.createUser({
       email: email.trim().toLowerCase(),
       password,
       email_confirm: true,
-      user_metadata: { birth_date: birthDate },
+      user_metadata: {
+        birth_date: birthDate,
+        ...(identityResult.identity
+          ? {
+              life_domains: identityResult.identity.lifeDomains,
+              class_template: identityResult.identity.classTemplate.id,
+              class_display_name: identityResult.identity.classDisplayName,
+            }
+          : {}),
+      },
     });
 
     if (createErr || !created.user) {
@@ -69,6 +114,7 @@ router.post('/signup', async (req: Request, res: Response) => {
       userId: created.user.id,
       email: created.user.email || email.trim().toLowerCase(),
       birthDate,
+      identity: identityResult.identity,
     });
 
     const { data: sessionData, error: signInErr } = await getSupabaseAuth().auth.signInWithPassword({
@@ -81,6 +127,7 @@ router.post('/signup', async (req: Request, res: Response) => {
         success: true,
         needsLogin: true,
         message: 'Account created — please log in.',
+        identity: identityResult.identity,
       });
     }
 
@@ -89,6 +136,7 @@ router.post('/signup', async (req: Request, res: Response) => {
       token: sessionData.session.access_token,
       refreshToken: sessionData.session.refresh_token,
       message: 'Account created',
+      identity: identityResult.identity,
     });
   } catch (err) {
     return res.status(500).json({

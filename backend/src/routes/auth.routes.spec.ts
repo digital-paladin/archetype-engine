@@ -47,6 +47,7 @@ jest.mock('../lib/supabase', () => ({
 
 jest.mock('../services/onboarding.service', () => ({
   isValidBirthDate: jest.requireActual('../services/onboarding.service').isValidBirthDate,
+  resolveSignupIdentity: jest.requireActual('../services/onboarding.service').resolveSignupIdentity,
   provisionNewUser: (...args: any[]) => mockProvision(...args),
 }));
 
@@ -324,6 +325,44 @@ describe('POST /api/auth/signup', () => {
       userId: 'uid-1',
       email: 'hunter@test.com',
       birthDate: '1995-03-01',
+      identity: null,
     });
+  });
+
+  it('returns 201 and passes identity when domains provided', async () => {
+    mockCreateUser.mockResolvedValue({
+      data: { user: { id: 'uid-2', email: 'hunter2@test.com' } },
+      error: null,
+    });
+    mockProvision.mockResolvedValue(undefined);
+    mockSignIn.mockResolvedValue({
+      data: {
+        session: { access_token: 'access2', refresh_token: 'refresh2' },
+      },
+      error: null,
+    });
+
+    const res = await request(makeApp())
+      .post('/api/auth/signup')
+      .send({
+        email: 'hunter2@test.com',
+        password: 'password1',
+        birthDate: '1995-03-01',
+        domains: ['Strength Training', 'Martial Arts', 'Endurance'],
+        classDisplayName: 'Iron Monk',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.identity?.classDisplayName).toBe('Iron Monk');
+    expect(res.body.identity?.classTemplate?.id).toBe('berserker');
+    expect(mockProvision).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'uid-2',
+        identity: expect.objectContaining({
+          classDisplayName: 'Iron Monk',
+          lifeDomains: ['Strength Training', 'Martial Arts', 'Endurance'],
+        }),
+      })
+    );
   });
 });
