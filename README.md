@@ -332,3 +332,5 @@ MIT — fork, adapt, and build your own archetype.
 ---
 
 *Built and battle-tested over 23+ months of continuous operation. The system works because it was built from inside the constraint it was designed for.*
+
+<!-- vercel-redeploy: 2026-07-13 -->
