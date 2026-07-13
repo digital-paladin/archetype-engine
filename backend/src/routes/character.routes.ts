@@ -6,6 +6,7 @@ import { ArchiveReaderService } from '../services/archiveReader.service';
 import { getDataService } from '../services/data/dataService';
 import { getSupabaseAdmin } from '../lib/supabase';
 import { calculateOverallLevelInfo } from '../utils/overallLevel';
+import { getUserBirthDate } from '../services/onboarding.service';
 
 const router = Router();
 
@@ -182,8 +183,14 @@ router.get('/stats', async (req: Request, res: Response) => {
           rustStatus:            'sharp' as const,
         };
       });
-      // Overall level = chronological age from PLAYER_BIRTH_DATE — NOT max skill-tree level.
-      const overallLevelInfo = calculateOverallLevelInfo();
+      // Overall level = chronological age from users.birth_date (SaaS); env is legacy fallback.
+      let birthDate: string | undefined;
+      try {
+        birthDate = (await getUserBirthDate(userId)) ?? undefined;
+      } catch (bdErr) {
+        console.warn('[CHARACTER /stats] birth_date lookup failed:', bdErr instanceof Error ? bdErr.message : bdErr);
+      }
+      const overallLevelInfo = calculateOverallLevelInfo(birthDate);
       console.log(`[CHARACTER /stats] DB — ${dbStats.length} classes, overall L${overallLevelInfo.level}, profile: ${profile ? 'yes' : 'no (defaults)'}`);
       return res.json({
         vitality:       profile?.vitality    ?? 100,

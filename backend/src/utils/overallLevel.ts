@@ -1,20 +1,26 @@
 import { OverallLevelInfo } from '../models/character.model';
 
 /**
- * Overall Character Level = chronological age from PLAYER_BIRTH_DATE (YYYY-MM-DD).
- * Set PLAYER_BIRTH_DATE in Railway / backend .env — do not commit real DOB to the public repo.
+ * Overall Character Level = chronological age.
+ * Prefer per-user `users.birth_date` (SaaS). Env `PLAYER_BIRTH_DATE` is legacy single-tenant fallback.
+ * Do not commit a real DOB to the public repo.
  */
 export function calculateOverallLevelInfo(
-  birthDateStr: string = process.env.PLAYER_BIRTH_DATE || '2000-01-01',
+  birthDateStr?: string,
   now: Date = new Date()
 ): OverallLevelInfo {
-  if (!process.env.PLAYER_BIRTH_DATE) {
+  const resolved =
+    birthDateStr ||
+    process.env.PLAYER_BIRTH_DATE ||
+    '2000-01-01';
+
+  if (!birthDateStr && !process.env.PLAYER_BIRTH_DATE) {
     console.warn(
-      '[overallLevel] PLAYER_BIRTH_DATE unset — using placeholder 2000-01-01. Set env on Railway.'
+      '[overallLevel] No users.birth_date or PLAYER_BIRTH_DATE — using placeholder 2000-01-01.'
     );
   }
 
-  const birthDate = new Date(`${birthDateStr}T00:00:00Z`);
+  const birthDate = new Date(`${resolved}T00:00:00Z`);
 
   let age = now.getUTCFullYear() - birthDate.getUTCFullYear();
   const hasHadBirthdayThisYear =
@@ -25,7 +31,7 @@ export function calculateOverallLevelInfo(
     age--;
   }
 
-  const [, birthMonth, birthDay] = birthDateStr.split('-');
+  const [, birthMonth, birthDay] = resolved.split('-');
   const nextBirthdayYear = hasHadBirthdayThisYear ? now.getUTCFullYear() + 1 : now.getUTCFullYear();
   const nextBirthday = new Date(`${nextBirthdayYear}-${birthMonth}-${birthDay}T00:00:00Z`);
 

@@ -1,9 +1,10 @@
 import { Router, Request, Response } from 'express';
 import { randomUUID } from 'crypto';
 import { createClient } from '@supabase/supabase-js';
-import { getSupabaseAuth } from '../lib/supabase';
+import { getSupabaseAuth, getSupabaseAdmin } from '../lib/supabase';
 import { authMiddleware } from '../middleware/auth.middleware';
 import { getDataService } from '../services/data/dataService';
+import { isValidBirthDate, provisionNewUser } from '../services/onboarding.service';
 
 const router = Router();
 
@@ -26,6 +27,76 @@ function getSupabaseClientForToken(accessToken: string) {
     global: { headers: { Authorization: `Bearer ${accessToken}` } },
   });
 }
+
+/**
+ * POST /api/auth/signup
+ * Thin SaaS onboarding: create Auth user + public.users (birth_date) + starter stats.
+ * Uses service-role admin.createUser with email_confirm so demos work without inbox.
+ * Body: { email, password, birthDate: YYYY-MM-DD }
+ */
+router.post('/signup', async (req: Request, res: Response) => {
+  const { email, password, birthDate } = req.body ?? {};
+
+  if (!email || typeof email !== 'string') {
+    return res.status(400).json({ success: false, error: 'email required' });
+  }
+  if (!password || typeof password !== 'string' || password.length < 8) {
+    return res.status(400).json({ success: false, error: 'password must be at least 8 characters' });
+  }
+  if (!birthDate || typeof birthDate !== 'string' || !isValidBirthDate(birthDate)) {
+    return res.status(400).json({
+      success: false,
+      error: 'birthDate required as YYYY-MM-DD (not in the future)',
+    });
+  }
+
+  try {
+    const admin = getSupabaseAdmin();
+    const { data: created, error: createErr } = await admin.auth.admin.createUser({
+      email: email.trim().toLowerCase(),
+      password,
+      email_confirm: true,
+      user_metadata: { birth_date: birthDate },
+    });
+
+    if (createErr || !created.user) {
+      const msg = createErr?.message || 'Could not create account';
+      const status = /already|registered|exists/i.test(msg) ? 409 : 400;
+      return res.status(status).json({ success: false, error: msg });
+    }
+
+    await provisionNewUser({
+      userId: created.user.id,
+      email: created.user.email || email.trim().toLowerCase(),
+      birthDate,
+    });
+
+    const { data: sessionData, error: signInErr } = await getSupabaseAuth().auth.signInWithPassword({
+      email: email.trim().toLowerCase(),
+      password,
+    });
+
+    if (signInErr || !sessionData.session) {
+      return res.status(201).json({
+        success: true,
+        needsLogin: true,
+        message: 'Account created — please log in.',
+      });
+    }
+
+    return res.status(201).json({
+      success: true,
+      token: sessionData.session.access_token,
+      refreshToken: sessionData.session.refresh_token,
+      message: 'Account created',
+    });
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      error: err instanceof Error ? err.message : 'Signup failed',
+    });
+  }
+});
 
 /**
  * POST /api/auth/login

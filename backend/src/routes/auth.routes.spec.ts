@@ -19,6 +19,8 @@ const mockGetUser = jest.fn<Promise<any>, any[]>();
 const mockResetPasswordForEmail = jest.fn<Promise<any>, any[]>();
 const mockSignInWithOtp = jest.fn<Promise<any>, any[]>();
 const mockUpdateUser = jest.fn<Promise<any>, any[]>();
+const mockCreateUser = jest.fn<Promise<any>, any[]>();
+const mockProvision = jest.fn<Promise<any>, any[]>();
 
 jest.mock('../lib/supabase', () => ({
   getSupabaseAuth: () => ({
@@ -31,7 +33,21 @@ jest.mock('../lib/supabase', () => ({
       updateUser:              (...args: any[]) => mockUpdateUser(...args),
     },
   }),
-  getSupabaseAdmin: jest.fn(),
+  getSupabaseAdmin: () => ({
+    auth: {
+      admin: {
+        createUser: (...args: any[]) => mockCreateUser(...args),
+      },
+    },
+    from: () => ({
+      upsert: jest.fn().mockResolvedValue({ error: null }),
+    }),
+  }),
+}));
+
+jest.mock('../services/onboarding.service', () => ({
+  isValidBirthDate: jest.requireActual('../services/onboarding.service').isValidBirthDate,
+  provisionNewUser: (...args: any[]) => mockProvision(...args),
 }));
 
 // ── Import AFTER mock ──────────────────────────────────────────────────────
@@ -244,5 +260,70 @@ describe('GET /api/auth/verify', () => {
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.message).toMatch(/valid/i);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/auth/signup
+// ─────────────────────────────────────────────────────────────────────────────
+describe('POST /api/auth/signup', () => {
+  beforeEach(() => {
+    mockCreateUser.mockReset();
+    mockProvision.mockReset();
+    mockSignIn.mockReset();
+  });
+
+  it('returns 400 when email is missing', async () => {
+    const res = await request(makeApp())
+      .post('/api/auth/signup')
+      .send({ password: 'password1', birthDate: '1995-03-01' });
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 400 for short password', async () => {
+    const res = await request(makeApp())
+      .post('/api/auth/signup')
+      .send({ email: 'a@b.com', password: 'short', birthDate: '1995-03-01' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/password/i);
+  });
+
+  it('returns 400 for invalid birthDate', async () => {
+    const res = await request(makeApp())
+      .post('/api/auth/signup')
+      .send({ email: 'a@b.com', password: 'password1', birthDate: 'not-a-date' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/birthDate/i);
+  });
+
+  it('returns 201 with tokens on success', async () => {
+    mockCreateUser.mockResolvedValue({
+      data: { user: { id: 'uid-1', email: 'hunter@test.com' } },
+      error: null,
+    });
+    mockProvision.mockResolvedValue(undefined);
+    mockSignIn.mockResolvedValue({
+      data: {
+        session: { access_token: 'access', refresh_token: 'refresh' },
+      },
+      error: null,
+    });
+
+    const res = await request(makeApp())
+      .post('/api/auth/signup')
+      .send({
+        email: 'Hunter@Test.com',
+        password: 'password1',
+        birthDate: '1995-03-01',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.success).toBe(true);
+    expect(res.body.token).toBe('access');
+    expect(mockProvision).toHaveBeenCalledWith({
+      userId: 'uid-1',
+      email: 'hunter@test.com',
+      birthDate: '1995-03-01',
+    });
   });
 });

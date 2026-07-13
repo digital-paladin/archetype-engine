@@ -4,7 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { AuthService } from './auth.service';
 
-type LoginMode = 'login' | 'forgot' | 'magic';
+type LoginMode = 'login' | 'signup' | 'forgot' | 'magic';
 
 @Component({
   selector: 'app-login',
@@ -65,6 +65,10 @@ type LoginMode = 'login' | 'forgot' | 'magic';
             </button>
 
             <div class="auth-links">
+              <button type="button" class="text-link" (click)="setMode('signup')">
+                Create account
+              </button>
+              <span class="divider">·</span>
               <button type="button" class="text-link" (click)="setMode('forgot')">
                 Forgot password?
               </button>
@@ -73,6 +77,89 @@ type LoginMode = 'login' | 'forgot' | 'magic';
                 Sign in with magic link
               </button>
             </div>
+          </form>
+        }
+
+        @if (mode() === 'signup') {
+          <form (ngSubmit)="onSignup()" class="login-form">
+            <p class="mode-copy">
+              The System has detected a new Hunter. Set your birth date —
+              Overall Level is your chronological age.
+            </p>
+
+            <div class="form-group">
+              <label for="signup-email">Email</label>
+              <input
+                id="signup-email"
+                type="email"
+                [(ngModel)]="username"
+                name="signupEmail"
+                placeholder="you@example.com"
+                required
+                [disabled]="isBusy()"
+              />
+            </div>
+
+            <div class="form-group">
+              <label for="signup-password">Password</label>
+              <input
+                id="signup-password"
+                type="password"
+                [(ngModel)]="password"
+                name="signupPassword"
+                placeholder="At least 8 characters"
+                required
+                minlength="8"
+                [disabled]="isBusy()"
+              />
+            </div>
+
+            <div class="form-group">
+              <label for="signup-password2">Confirm password</label>
+              <input
+                id="signup-password2"
+                type="password"
+                [(ngModel)]="passwordConfirm"
+                name="signupPassword2"
+                placeholder="Repeat password"
+                required
+                [disabled]="isBusy()"
+              />
+            </div>
+
+            <div class="form-group">
+              <label for="birth-date">Birth date</label>
+              <input
+                id="birth-date"
+                type="date"
+                [(ngModel)]="birthDate"
+                name="birthDate"
+                required
+                [disabled]="isBusy()"
+              />
+            </div>
+
+            @if (errorMessage()) {
+              <div class="error-message">
+                <pre>{{ errorMessage() }}</pre>
+              </div>
+            }
+
+            @if (successMessage()) {
+              <div class="success-message">{{ successMessage() }}</div>
+            }
+
+            <button
+              type="submit"
+              class="login-button"
+              [disabled]="!canSignup() || isBusy()"
+            >
+              {{ isBusy() ? 'Creating…' : 'Begin journey' }}
+            </button>
+
+            <button type="button" class="text-link back-link" (click)="setMode('login')">
+              ← Back to login
+            </button>
           </form>
         }
 
@@ -282,6 +369,8 @@ type LoginMode = 'login' | 'forgot' | 'magic';
 export class LoginComponent {
   username = '';
   password = '';
+  passwordConfirm = '';
+  birthDate = '';
   mode = signal<LoginMode>('login');
   isBusy = signal(false);
   errorMessage = signal('');
@@ -298,6 +387,15 @@ export class LoginComponent {
     this.successMessage.set('');
   }
 
+  canSignup(): boolean {
+    return (
+      !!this.username &&
+      this.password.length >= 8 &&
+      this.password === this.passwordConfirm &&
+      !!this.birthDate
+    );
+  }
+
   async onLogin(): Promise<void> {
     this.isBusy.set(true);
     this.errorMessage.set('');
@@ -309,6 +407,38 @@ export class LoginComponent {
         this.router.navigate(['/dashboard']);
       } else {
         this.errorMessage.set(result.error || 'Login failed');
+      }
+    } catch (error: any) {
+      this.errorMessage.set(error.message || 'Network error. Please try again.');
+    } finally {
+      this.isBusy.set(false);
+    }
+  }
+
+  async onSignup(): Promise<void> {
+    this.isBusy.set(true);
+    this.errorMessage.set('');
+    this.successMessage.set('');
+
+    if (this.password !== this.passwordConfirm) {
+      this.errorMessage.set('Passwords do not match.');
+      this.isBusy.set(false);
+      return;
+    }
+
+    try {
+      const result = await this.authService.signup(
+        this.username,
+        this.password,
+        this.birthDate
+      );
+      if (result.success && result.token) {
+        this.router.navigate(['/dashboard']);
+      } else if (result.success && result.needsLogin) {
+        this.successMessage.set(result.message || 'Account created — please log in.');
+        this.setMode('login');
+      } else {
+        this.errorMessage.set(result.error || 'Signup failed');
       }
     } catch (error: any) {
       this.errorMessage.set(error.message || 'Network error. Please try again.');

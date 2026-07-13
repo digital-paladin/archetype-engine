@@ -92,3 +92,5 @@ frontend/playwright-report/
 
 # Agent audit temp files
 frontend/e2e/.audit-*
+.vercel
+.env*

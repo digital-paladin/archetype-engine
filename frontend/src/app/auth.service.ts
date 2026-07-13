@@ -18,6 +18,7 @@ interface AuthCallbackResult {
 interface LoginResponse extends AuthActionResponse {
   token?: string;
   refreshToken?: string;
+  needsLogin?: boolean;
 }
 
 @Injectable({
@@ -65,6 +66,33 @@ export class AuthService {
       }
 
       return { success: false, error: errorMessage };
+    }
+  }
+
+  /**
+   * Thin onboarding signup — email + password + birthDate (YYYY-MM-DD).
+   */
+  async signup(email: string, password: string, birthDate: string): Promise<LoginResponse> {
+    try {
+      const response = await firstValueFrom(
+        this.http.post<LoginResponse>(`${this.apiUrl}/api/auth/signup`, {
+          email,
+          password,
+          birthDate,
+        })
+      );
+
+      if (response.success && response.token) {
+        this.setToken(response.token);
+        if (response.refreshToken) this.setRefreshToken(response.refreshToken);
+      }
+
+      return response;
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.error?.error || error.message || 'Signup failed',
+      };
     }
   }
 
