@@ -8,7 +8,8 @@
  *   npx ts-node src/scripts/patch_may17_character_stats.ts
  *
  * Requires in backend/.env:
- *   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, OWNER_EMAIL
+ *   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+ *   OWNER_USER_ID and/or OWNER_EMAIL
  */
 
 import dotenv from 'dotenv';
@@ -20,10 +21,15 @@ dotenv.config({ path: resolve(__dirname, '../../.env') });
 
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-const OWNER_EMAIL = process.env.OWNER_EMAIL!;
+const OWNER_USER_ID = process.env.OWNER_USER_ID?.trim();
+const OWNER_EMAIL = process.env.OWNER_EMAIL?.trim().toLowerCase();
 
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !OWNER_EMAIL) {
-  console.error('[PATCH] Missing SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, or OWNER_EMAIL');
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+  console.error('[PATCH] Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
+  process.exit(1);
+}
+if (!OWNER_USER_ID && !OWNER_EMAIL) {
+  console.error('[PATCH] Set OWNER_USER_ID or OWNER_EMAIL in backend/.env');
   process.exit(1);
 }
 
@@ -50,16 +56,23 @@ const MAY17_STATS: Array<{
 ];
 
 async function main(): Promise<void> {
-  const { data, error } = await db.auth.admin.listUsers();
-  if (error) throw new Error(`listUsers: ${error.message}`);
-  const user = data.users.find(u => u.email === OWNER_EMAIL);
-  if (!user) throw new Error(`User ${OWNER_EMAIL} not found`);
-  console.log(`[PATCH] user=${user.id}`);
+  let userId: string;
+  if (OWNER_USER_ID) {
+    userId = OWNER_USER_ID;
+    console.log(`[PATCH] user=${userId} (OWNER_USER_ID)`);
+  } else {
+    const { data, error } = await db.auth.admin.listUsers({ perPage: 200 });
+    if (error) throw new Error(`listUsers: ${error.message}`);
+    const user = data.users.find(u => (u.email || '').toLowerCase() === OWNER_EMAIL);
+    if (!user) throw new Error(`User ${OWNER_EMAIL} not found`);
+    userId = user.id;
+    console.log(`[PATCH] user=${userId} (${OWNER_EMAIL})`);
+  }
 
   for (const s of MAY17_STATS) {
     const { error: upErr } = await db.from('character_stats').upsert(
       {
-        user_id: user.id,
+        user_id: userId,
         class_name: s.class_name,
         level: s.level,
         current_xp: s.current_xp,
