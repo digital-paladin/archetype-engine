@@ -86,6 +86,7 @@ frontend/*.txt
 
 # Playwright credentials, sessions, and test artifacts
 frontend/e2e/.env.playwright
+frontend/e2e/.env.demo
 frontend/e2e/.auth/
 frontend/test-results/
 frontend/playwright-report/

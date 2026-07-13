@@ -22,7 +22,7 @@ export default defineConfig({
 
   use: {
     baseURL: process.env['PLAYWRIGHT_BASE_URL'] ?? 'http://localhost:4200',
-    storageState: 'e2e/.auth/session.json',  // reused after global-setup login
+    // storageState applied only on chromium project after setup creates the file
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
@@ -35,11 +35,25 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
     },
 
-    // ── 2. All smoke tests (depend on setup) ────────────────────────────────
+    // ── 2. Authed smoke tests (depend on setup) ─────────────────────────────
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      testIgnore: ['**/global.setup.ts', '**/onboarding.spec.ts', '**/auth.spec.ts'],
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: 'e2e/.auth/session.json',
+      },
       dependencies: ['setup'],
+    },
+
+    // ── 3. Unauthed / onboarding flows (no saved session) ───────────────────
+    {
+      name: 'chromium-onboarding',
+      testMatch: ['**/onboarding.spec.ts', '**/auth.spec.ts'],
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: { cookies: [], origins: [] },
+      },
     },
   ],
 

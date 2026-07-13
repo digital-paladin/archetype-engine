@@ -29,14 +29,16 @@ test.describe('Thin onboarding', () => {
     test.setTimeout(120_000);
 
     const stamp = Date.now();
-    const email =
-      process.env['PLAYWRIGHT_DEMO_EMAIL'] ||
-      `demo.hunter+${stamp}@digitalpaladin.test`;
+    // Always unique — DEMO_EMAIL is only a local-part prefix if provided.
+    const emailLocal =
+      (process.env['PLAYWRIGHT_DEMO_EMAIL'] || 'demo.hunter').split('@')[0].replace(/\+.*/, '');
+    const email = `${emailLocal}+${stamp}@digitalpaladin.test`;
     const password =
       process.env['PLAYWRIGHT_DEMO_PASSWORD'] ||
       `DemoHunter_${stamp}_Aa1!`;
     const birthDate = process.env['PLAYWRIGHT_DEMO_BIRTH_DATE'] || '1995-03-01';
     const age = expectedAge(birthDate);
+    console.log(`[onboarding] signing up as ${email} (expect Level ${age})`);
 
     await page.goto('/login');
     await page.getByRole('button', { name: 'Create account' }).click();
