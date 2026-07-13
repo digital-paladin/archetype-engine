@@ -8,6 +8,7 @@
     "watch": "ng build --watch --configuration development",
     "test": "ng test",
     "e2e": "dotenv -e e2e/.env.playwright -- playwright test",
+    "e2e:headed": "dotenv -e e2e/.env.playwright -- playwright test --headed --project=chromium",
     "e2e:ui": "dotenv -e e2e/.env.playwright -- playwright test --ui",
     "e2e:debug": "dotenv -e e2e/.env.playwright -- playwright test --debug",
     "e2e:report": "playwright show-report"
