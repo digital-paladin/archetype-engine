@@ -1,5 +1,6 @@
-import { Component, Input, OnChanges } from '@angular/core';
+import { Component, Input, OnChanges, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { HttpClient } from '@angular/common/http';
 import { environment } from '../environments/environment';
 
 export interface SleepData {
@@ -118,8 +119,10 @@ export interface VitalsData {
             <span class="eso-placeholder-icon">💤</span>
             <p class="eso-placeholder-text">No sleep data for today</p>
             <p class="eso-placeholder-sub">
-              Connect Fitbit or wait until morning data syncs.<br>
-              <a [href]="fitbitAuthUrl" class="fitbit-link">Authorize Fitbit →</a>
+              Connect Oura (or legacy Fitbit) or wait until morning data syncs.<br>
+              <button type="button" class="fitbit-link" (click)="connectOura()">Authorize Oura →</button>
+              <span class="wearable-sep">·</span>
+              <a [href]="fitbitAuthUrl" class="fitbit-link">Fitbit (legacy) →</a>
             </p>
           </div>
         </section>
@@ -668,10 +671,16 @@ export interface VitalsData {
 
     /* ── Empty / link state ─────────────────────────── */
     .fitbit-link {
+      background: none;
+      border: none;
+      padding: 0;
+      font: inherit;
+      cursor: pointer;
       color: var(--eso-gold, #c9a84c);
-      text-decoration: none;
+      text-decoration: underline;
     }
     .fitbit-link:hover { text-decoration: underline; }
+    .wearable-sep { margin: 0 0.35rem; opacity: 0.6; }
 
     /* Vitality bar colors (reuse dashboard classes) */
     .eso-bar-vitality-high    { background: linear-gradient(90deg, #6fcf97, #27ae60) !important; }
@@ -804,6 +813,7 @@ export interface VitalsData {
   `],
 })
 export class SleepPanelComponent implements OnChanges {
+  private readonly http = inject(HttpClient);
   readonly fitbitAuthUrl = `${environment.apiUrl}/api/fitbit/auth`;
 
   @Input() today: SleepData | null = null;
@@ -812,6 +822,26 @@ export class SleepPanelComponent implements OnChanges {
   @Input() sleepDebt: number | null = null;
   @Input() activities: ActivitySummary | null = null;
   @Input() vitals: VitalsData | null = null;
+
+  connectOura(): void {
+    this.http.get<{ success: boolean; url?: string; error?: string }>(
+      `${environment.apiUrl}/api/oura/connect-url`
+    ).subscribe({
+      next: (res) => {
+        if (res.success && res.url) {
+          window.location.href = res.url;
+        } else {
+          console.warn('[SleepPanel] Oura connect failed:', res.error);
+          alert(res.error || 'Oura is not configured yet.');
+        }
+      },
+      error: (err) => {
+        const msg = err?.error?.error || 'Could not start Oura authorization.';
+        console.warn('[SleepPanel] Oura connect error:', msg);
+        alert(msg);
+      },
+    });
+  }
 
   monthReversed(): SleepDayData[] {
     if (!this.month) return [];

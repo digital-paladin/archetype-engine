@@ -567,20 +567,31 @@ export class DashboardComponent implements OnInit, OnDestroy {
   private fetchFitbitData(): void {
     const localDate = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD in local time
 
-    // Sleep — today
-    this.http.get<{ success: boolean; sleep: { score: number; hours: number; vitality: number; efficiency: number; deep_min: number; rem_min: number; light_min: number; awake_min: number }; source: string; requiresAuth?: boolean; error?: string }>(
-      `${environment.apiUrl}/api/fitbit/sleep/today?date=${localDate}`
+    // Sleep — today (Oura preferred → Fitbit fallback via aggregator)
+    this.http.get<{ success: boolean; sleep: { score: number; hours: number; vitality: number; efficiency: number; deep_min: number; rem_min: number; light_min: number; awake_min: number }; source: string; provider?: string; requiresAuth?: boolean; error?: string }>(
+      `${environment.apiUrl}/api/wearables/sleep/today?date=${localDate}`
     ).subscribe({
       next: (res) => {
         if (res.requiresAuth) {
-          console.warn(`[Dashboard] Fitbit sleep requires re-authorization. Visit /api/fitbit/auth to grant sleep scope.`);
+          console.warn(`[Dashboard] Wearable sleep requires re-authorization.`);
         } else if (res.success && res.sleep) {
           this.sleepData.set({ ...res.sleep, source: res.source });
           this.willpowerService.resetForNewSleep();
-          console.log(`[Dashboard] Sleep loaded (${res.source}): score=${res.sleep.score} hrs=${res.sleep.hours} vitality=${res.sleep.vitality}`);
+          console.log(`[Dashboard] Sleep loaded (${res.provider || res.source}): score=${res.sleep.score} hrs=${res.sleep.hours} vitality=${res.sleep.vitality}`);
         }
       },
-      error: () => { /* Non-fatal */ }
+      error: () => {
+        // Fallback to legacy Fitbit endpoint if aggregator unavailable
+        this.http.get<any>(`${environment.apiUrl}/api/fitbit/sleep/today?date=${localDate}`).subscribe({
+          next: (res) => {
+            if (res.success && res.sleep) {
+              this.sleepData.set({ ...res.sleep, source: res.source });
+              this.willpowerService.resetForNewSleep();
+            }
+          },
+          error: () => { /* Non-fatal */ }
+        });
+      }
     });
 
     // Sleep — 7-day history

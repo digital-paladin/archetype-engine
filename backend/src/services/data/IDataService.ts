@@ -80,6 +80,14 @@ export interface FitbitTokens {
   fitbit_user_id?: string;  // Fitbit's own user ID (informational)
 }
 
+/** Multi-provider wearable OAuth tokens (oura | garmin | whoop | fitbit). */
+export interface WearableTokenRow {
+  access_token: string;
+  refresh_token: string;
+  expires_at: number; // unix ms
+  scope?: string;
+}
+
 export interface SpendingEntry {
   id?: string;
   user_id?: string;
@@ -177,6 +185,10 @@ export interface IDataService {
   // ── Fitbit tokens ──────────────────────────────────────────────────────
   getFitbitTokens(userId: string): Promise<FitbitTokens | null>;
   saveFitbitTokens(userId: string, tokens: FitbitTokens): Promise<void>;
+
+  // ── Wearable tokens (Oura / Garmin / …) ────────────────────────────────
+  getWearableTokens(userId: string, provider: string): Promise<WearableTokenRow | null>;
+  saveWearableTokens(userId: string, provider: string, tokens: WearableTokenRow): Promise<void>;
 
   // ── Treasury ───────────────────────────────────────────────────────────
   getSpendingEntries(userId: string, month?: string): Promise<SpendingEntry[]>;

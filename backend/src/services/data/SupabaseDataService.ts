@@ -4,7 +4,7 @@ import {
   IDataService,
   CharacterStats, XPHistoryEntry,
   JournalEntry, ACMEntry, QuestEntry,
-  ActivityEntry, VaultItem, FitbitTokens,
+  ActivityEntry, VaultItem, FitbitTokens, WearableTokenRow,
   SpendingEntry, TreasurySettings,
   CharacterProfile,
   QuestLineEntry, GrandConvergenceData,
@@ -217,6 +217,43 @@ export class SupabaseDataService implements IDataService {
         expires_at:              tokens.expires_at,
         fitbit_user_id:          tokens.fitbit_user_id ?? null,
       }, { onConflict: 'user_id' });
+    if (error) throw error;
+  }
+
+  // ── Wearable tokens (multi-provider) ─────────────────────────────────────
+
+  async getWearableTokens(userId: string, provider: string): Promise<WearableTokenRow | null> {
+    const { data, error } = await this.db
+      .from('wearable_tokens')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('provider', provider)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    return {
+      access_token:  data.access_token_encrypted,
+      refresh_token: data.refresh_token_encrypted,
+      expires_at:    new Date(data.expires_at).getTime(),
+      scope:         data.scope ?? undefined,
+    };
+  }
+
+  async saveWearableTokens(
+    userId: string,
+    provider: string,
+    tokens: WearableTokenRow,
+  ): Promise<void> {
+    const { error } = await this.db
+      .from('wearable_tokens')
+      .upsert({
+        user_id:                userId,
+        provider,
+        access_token_encrypted: tokens.access_token,
+        refresh_token_encrypted: tokens.refresh_token,
+        expires_at:             new Date(tokens.expires_at).toISOString(),
+        scope:                  tokens.scope ?? null,
+      }, { onConflict: 'user_id,provider' });
     if (error) throw error;
   }
 
