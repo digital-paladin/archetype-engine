@@ -1,9 +1,16 @@
 import { Router, Request, Response } from 'express';
 import { randomUUID } from 'crypto';
 import { createClient } from '@supabase/supabase-js';
-import { getSupabaseAuth } from '../lib/supabase';
+import { getSupabaseAuth, getSupabaseAdmin } from '../lib/supabase';
 import { authMiddleware } from '../middleware/auth.middleware';
 import { getDataService } from '../services/data/dataService';
+import { isValidBirthDate, provisionNewUser, resolveSignupIdentity } from '../services/onboarding.service';
+import {
+  CLASS_TEMPLATES,
+  LIFE_DOMAINS,
+  normalizeDomains,
+  suggestClassTemplate,
+} from '../services/classTemplates';
 
 const router = Router();
 
@@ -26,6 +33,118 @@ function getSupabaseClientForToken(accessToken: string) {
     global: { headers: { Authorization: `Bearer ${accessToken}` } },
   });
 }
+
+/**
+ * GET /api/auth/onboarding-options
+ * Public catalog for signup step 2 (domains + class templates).
+ */
+router.get('/onboarding-options', (_req: Request, res: Response) => {
+  res.json({
+    success: true,
+    domains: [...LIFE_DOMAINS],
+    templates: CLASS_TEMPLATES,
+    rules: { minDomains: 3, maxDomains: 5 },
+  });
+});
+
+/**
+ * POST /api/auth/suggest-class
+ * Body: { domains: string[] } → suggested template (deterministic).
+ */
+router.post('/suggest-class', (req: Request, res: Response) => {
+  const domains = normalizeDomains(req.body?.domains);
+  if (domains.length < 3 || domains.length > 5) {
+    return res.status(400).json({ success: false, error: 'select 3 to 5 life domains' });
+  }
+  const template = suggestClassTemplate(domains);
+  return res.json({ success: true, template, domains });
+});
+
+/**
+ * POST /api/auth/signup
+ * Thin SaaS onboarding + optional identity scaffold (domains → class template).
+ * Body: { email, password, birthDate, domains?: string[], classDisplayName?: string }
+ */
+router.post('/signup', async (req: Request, res: Response) => {
+  const { email, password, birthDate } = req.body ?? {};
+
+  if (!email || typeof email !== 'string') {
+    return res.status(400).json({ success: false, error: 'email required' });
+  }
+  if (!password || typeof password !== 'string' || password.length < 8) {
+    return res.status(400).json({ success: false, error: 'password must be at least 8 characters' });
+  }
+  if (!birthDate || typeof birthDate !== 'string' || !isValidBirthDate(birthDate)) {
+    return res.status(400).json({
+      success: false,
+      error: 'birthDate required as YYYY-MM-DD (not in the future)',
+    });
+  }
+
+  const identityResult = resolveSignupIdentity(req.body ?? {});
+  if (!identityResult.ok) {
+    return res.status(400).json({ success: false, error: identityResult.error });
+  }
+
+  try {
+    const admin = getSupabaseAdmin();
+    const { data: created, error: createErr } = await admin.auth.admin.createUser({
+      email: email.trim().toLowerCase(),
+      password,
+      email_confirm: true,
+      user_metadata: {
+        birth_date: birthDate,
+        ...(identityResult.identity
+          ? {
+              life_domains: identityResult.identity.lifeDomains,
+              class_template: identityResult.identity.classTemplate.id,
+              class_display_name: identityResult.identity.classDisplayName,
+            }
+          : {}),
+      },
+    });
+
+    if (createErr || !created.user) {
+      const msg = createErr?.message || 'Could not create account';
+      const status = /already|registered|exists/i.test(msg) ? 409 : 400;
+      return res.status(status).json({ success: false, error: msg });
+    }
+
+    await provisionNewUser({
+      userId: created.user.id,
+      email: created.user.email || email.trim().toLowerCase(),
+      birthDate,
+      identity: identityResult.identity,
+    });
+
+    const { data: sessionData, error: signInErr } = await getSupabaseAuth().auth.signInWithPassword({
+      email: email.trim().toLowerCase(),
+      password,
+    });
+
+    if (signInErr || !sessionData.session) {
+      return res.status(201).json({
+        success: true,
+        needsLogin: true,
+        message: 'Account created — please log in.',
+        identity: identityResult.identity,
+      });
+    }
+
+    return res.status(201).json({
+      success: true,
+      token: sessionData.session.access_token,
+      refreshToken: sessionData.session.refresh_token,
+      message: 'Account created',
+      identity: identityResult.identity,
+    });
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      error: err instanceof Error ? err.message : 'Signup failed',
+    });
+  }
+});
 
 /**
  * POST /api/auth/login

@@ -86,6 +86,17 @@ frontend/*.txt
 
 # Playwright credentials, sessions, and test artifacts
 frontend/e2e/.env.playwright
+frontend/e2e/.env.demo
 frontend/e2e/.auth/
 frontend/test-results/
 frontend/playwright-report/
+
+# Agent audit temp files
+frontend/e2e/.audit-*
+.vercel
+.env
+.env.local
+.env.*.local
+!.env.example
+!backend/.env.example
+!frontend/e2e/.env.example

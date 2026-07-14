@@ -12,6 +12,9 @@ import * as fs from 'fs';
 
 const SESSION_PATH = path.resolve(__dirname, '.auth/session.json');
 
+// Setup must start unauthenticated (config default storageState may not exist yet).
+setup.use({ storageState: { cookies: [], origins: [] } });
+
 setup('authenticate', async ({ page }) => {
   const username = process.env['PLAYWRIGHT_USERNAME'];
   const password = process.env['PLAYWRIGHT_PASSWORD'];
@@ -22,6 +25,8 @@ setup('authenticate', async ({ page }) => {
       'Copy e2e/.env.example to e2e/.env.playwright and fill in credentials.'
     );
   }
+
+  fs.mkdirSync(path.dirname(SESSION_PATH), { recursive: true });
 
   await page.goto('/login');
   await page.locator('#username').fill(username);

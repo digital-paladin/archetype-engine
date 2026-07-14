@@ -5,6 +5,8 @@ import { XPProjectionService } from '../services/xpProjection.service';
 import { ArchiveReaderService } from '../services/archiveReader.service';
 import { getDataService } from '../services/data/dataService';
 import { getSupabaseAdmin } from '../lib/supabase';
+import { calculateOverallLevelInfo } from '../utils/overallLevel';
+import { getUserBirthDate } from '../services/onboarding.service';
 
 const router = Router();
 
@@ -49,9 +51,11 @@ function classNameToId(name: string): string {
 }
 
 function formatClassName(name: string): string {
+  // Display names must match XP-projection keys on the Character panel
+  // (getDbClassStat looks up by exact name — "Redteamer", not "Red Team Operator").
   const niceName: Record<string, string> = {
     developer: 'Developer', warrior: 'Warrior', sage: 'Sage', artist: 'Artist',
-    redteamer: 'Red Team Operator', 'financial-strategist': 'Financial Strategist',
+    redteamer: 'Redteamer', 'financial-strategist': 'Financial Strategist',
     survivalist: 'Survivalist', 'mechanical-engineer': 'Mechanical Engineer',
   };
   return niceName[classNameToId(name)] || name;
@@ -179,14 +183,15 @@ router.get('/stats', async (req: Request, res: Response) => {
           rustStatus:            'sharp' as const,
         };
       });
-      const maxLevel       = Math.max(...skillTrees.map(t => t.level));
-      const overallLevelInfo = {
-        level:         maxLevel,
-        nextLevel:     maxLevel + 1,
-        nextLevelDate: 'TBD',
-        daysRemaining: 365,
-      };
-      console.log(`[CHARACTER /stats] DB — ${dbStats.length} classes, profile: ${profile ? 'yes' : 'no (defaults)'}`);
+      // Overall level = chronological age from users.birth_date (SaaS); env is legacy fallback.
+      let birthDate: string | undefined;
+      try {
+        birthDate = (await getUserBirthDate(userId)) ?? undefined;
+      } catch (bdErr) {
+        console.warn('[CHARACTER /stats] birth_date lookup failed:', bdErr instanceof Error ? bdErr.message : bdErr);
+      }
+      const overallLevelInfo = calculateOverallLevelInfo(birthDate);
+      console.log(`[CHARACTER /stats] DB — ${dbStats.length} classes, overall L${overallLevelInfo.level}, profile: ${profile ? 'yes' : 'no (defaults)'}`);
       return res.json({
         vitality:       profile?.vitality    ?? 100,
         sleepDebt:      profile?.sleep_debt  ?? 0,

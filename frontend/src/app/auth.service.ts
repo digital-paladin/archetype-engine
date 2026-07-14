@@ -18,6 +18,7 @@ interface AuthCallbackResult {
 interface LoginResponse extends AuthActionResponse {
   token?: string;
   refreshToken?: string;
+  needsLogin?: boolean;
 }
 
 @Injectable({
@@ -65,6 +66,77 @@ export class AuthService {
       }
 
       return { success: false, error: errorMessage };
+    }
+  }
+
+  /**
+   * Thin onboarding signup — email + password + birthDate + optional identity scaffold.
+   */
+  async signup(
+    email: string,
+    password: string,
+    birthDate: string,
+    opts?: { domains?: string[]; classDisplayName?: string }
+  ): Promise<LoginResponse> {
+    try {
+      const response = await firstValueFrom(
+        this.http.post<LoginResponse>(`${this.apiUrl}/api/auth/signup`, {
+          email,
+          password,
+          birthDate,
+          ...(opts?.domains?.length ? { domains: opts.domains } : {}),
+          ...(opts?.classDisplayName ? { classDisplayName: opts.classDisplayName } : {}),
+        })
+      );
+
+      if (response.success && response.token) {
+        this.setToken(response.token);
+        if (response.refreshToken) this.setRefreshToken(response.refreshToken);
+      }
+
+      return response;
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.error?.error || error.message || 'Signup failed',
+      };
+    }
+  }
+
+  /** Public domain + template catalog for signup step 2. */
+  async getOnboardingOptions(): Promise<{
+    success: boolean;
+    domains?: string[];
+    templates?: Array<{ id: string; name: string; tagline: string }>;
+    error?: string;
+  }> {
+    try {
+      return await firstValueFrom(
+        this.http.get<{
+          success: boolean;
+          domains: string[];
+          templates: Array<{ id: string; name: string; tagline: string }>;
+        }>(`${this.apiUrl}/api/auth/onboarding-options`)
+      );
+    } catch (error: any) {
+      return { success: false, error: error.error?.error || error.message || 'Failed to load options' };
+    }
+  }
+
+  async suggestClass(domains: string[]): Promise<{
+    success: boolean;
+    template?: { id: string; name: string; tagline: string };
+    error?: string;
+  }> {
+    try {
+      return await firstValueFrom(
+        this.http.post<{ success: boolean; template: { id: string; name: string; tagline: string } }>(
+          `${this.apiUrl}/api/auth/suggest-class`,
+          { domains }
+        )
+      );
+    } catch (error: any) {
+      return { success: false, error: error.error?.error || error.message || 'Suggest failed' };
     }
   }
 

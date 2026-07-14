@@ -35,7 +35,9 @@ const db: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY,
 // ── Snapshot file paths ────────────────────────────────────────────────────
 const SNAPSHOT_DIR = resolve(
   __dirname,
-  '../../../../character-progression/current-character-state-051726'
+  // solo-leveling-journey sibling of archetype-engine (ProtonDrive path) OR local override
+  process.env.MAY17_SNAPSHOT_DIR ||
+    'C:/Users/wraith-admin/ProtonDrive-wraith-admin-sync/IP-OWNERSHIP-INVENTORY/gitlab/solo-leveling-journey/character-progression/current-character-state-051726'
 );
 const CHAR_SHEET = resolve(SNAPSHOT_DIR, 'character-sheet.md');
 const JOURNAL    = resolve(SNAPSHOT_DIR, 'daily manual journal compendium(final version).md');

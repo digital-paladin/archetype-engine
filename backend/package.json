@@ -4,15 +4,17 @@
   "description": "Backend API for Digital Paladin character progression system",
   "main": "dist/server.js",
   "scripts": {
-    "dev": "nodemon src/server.ts",
+    "dev": "nodemon --exec \"ts-node -r dotenv/config\" src/server.ts",
     "build": "tsc",
-    "start": "node dist/server.js",
+    "start": "node -r dotenv/config dist/server.js",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "lint": "eslint src/**/*.ts",
     "seed:stats": "ts-node --transpile-only src/scripts/seed_character_stats.ts",
-    "seed:quest-lines": "ts-node --transpile-only src/scripts/seed_quest_lines.ts"
+    "seed:quest-lines": "ts-node --transpile-only src/scripts/seed_quest_lines.ts",
+    "patch:may17-stats": "ts-node --transpile-only src/scripts/patch_may17_character_stats.ts",
+    "patch:owner-birth-date": "ts-node --transpile-only src/scripts/upsert_owner_birth_date.ts"
   },
   "keywords": [
     "character-progression",
