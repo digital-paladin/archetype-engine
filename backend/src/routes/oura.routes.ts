@@ -2,15 +2,16 @@ import { Router, Request, Response } from 'express';
 import { getDataService } from '../services/data/dataService';
 import { OuraService } from '../services/oura.service';
 import { authMiddleware } from '../middleware/auth.middleware';
+import { requireTier } from '../middleware/requireTier.middleware';
 
 const router = Router();
 const ouraService = new OuraService();
 
 /**
- * GET /api/oura/connect-url — PROTECTED
+ * GET /api/oura/connect-url — PROTECTED (Paladin+)
  * Returns OAuth authorize URL with state=userId for SPA redirect.
  */
-router.get('/connect-url', authMiddleware, (req: Request, res: Response) => {
+router.get('/connect-url', authMiddleware, requireTier('paladin'), (req: Request, res: Response) => {
   try {
     if (!ouraService.isConfigured()) {
       return res.status(503).json({
@@ -65,7 +66,7 @@ router.get('/callback', async (req: Request, res: Response) => {
   }
 });
 
-router.get('/status', authMiddleware, async (req: Request, res: Response) => {
+router.get('/status', authMiddleware, requireTier('paladin'), async (req: Request, res: Response) => {
   const userId = (req as any).userId as string;
   const connected = await ouraService.hasTokens(userId);
   res.json({
@@ -76,7 +77,7 @@ router.get('/status', authMiddleware, async (req: Request, res: Response) => {
   });
 });
 
-router.get('/sleep/today', authMiddleware, async (req: Request, res: Response) => {
+router.get('/sleep/today', authMiddleware, requireTier('paladin'), async (req: Request, res: Response) => {
   if (!ouraService.isConfigured()) {
     return res.status(503).json({
       success: false,
@@ -131,7 +132,7 @@ router.get('/sleep/today', authMiddleware, async (req: Request, res: Response) =
   }
 });
 
-router.get('/readiness/today', authMiddleware, async (req: Request, res: Response) => {
+router.get('/readiness/today', authMiddleware, requireTier('paladin'), async (req: Request, res: Response) => {
   if (!ouraService.isConfigured()) {
     return res.status(503).json({
       success: false,
