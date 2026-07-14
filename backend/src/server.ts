@@ -17,6 +17,9 @@ import foodEstimateRouter from './routes/foodEstimate.routes';
 import fitbitRouter from './routes/fitbit.routes';
 import ouraRouter from './routes/oura.routes';
 import wearablesRouter from './routes/wearables.routes';
+import billingRouter from './routes/billing.routes';
+import stripeWebhookRouter from './routes/stripeWebhook.routes';
+import aiRouter from './routes/ai.routes';
 import acmRouter from './routes/acm.routes';
 import questsRouter from './routes/quests.routes';
 import fastingRouter from './routes/fasting.routes';
@@ -29,6 +32,7 @@ import inventoryRouter from './routes/inventory.routes';
 import treasuryRouter from './routes/treasury.routes';
 import todoistRouter from './routes/todoist.routes';
 import { authMiddleware } from './middleware/auth.middleware';
+import { requireTier } from './middleware/requireTier.middleware';
 import { FitbitService } from './services/fitbit.service';
 import { OuraService } from './services/oura.service';
 import { getDataService } from './services/data/dataService';
@@ -64,6 +68,9 @@ const io = new SocketIOServer(httpServer, {
   }
 });
 
+// Stripe webhook MUST receive raw body (before express.json)
+app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }), stripeWebhookRouter);
+
 // Other middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -96,7 +103,10 @@ app.use('/api/action-log', actionLogRouter);
 app.use('/api/daily-metrics', dailyMetricsRouter);
 app.use('/api/consume', consumeRouter);
 app.use('/api/food-estimate', foodEstimateRouter);
-app.use('/api/wearables', wearablesRouter);
+app.use('/api/billing', billingRouter);
+app.use('/api/ai', aiRouter);
+// Wearables: Paladin+ gate (Owner / BILLING_BYPASS still pass via getUserTier)
+app.use('/api/wearables', requireTier('paladin'), wearablesRouter);
 app.use('/api/acm', acmRouter);
 app.use('/api/quests', questsRouter);
 app.use('/api/fasting', fastingRouter);

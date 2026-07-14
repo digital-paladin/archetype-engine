@@ -37,6 +37,7 @@
     "multer": "^2.1.1",
     "node-cron": "^4.2.1",
     "socket.io": "^4.6.1",
+    "stripe": "^17.7.0",
     "ws": "^8.20.1"
   },
   "devDependencies": {
