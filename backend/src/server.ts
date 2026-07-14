@@ -15,6 +15,8 @@ import dailyMetricsRouter from './routes/dailyMetrics.routes';
 import consumeRouter, { setConsumeSocketIO } from './routes/consume.routes';
 import foodEstimateRouter from './routes/foodEstimate.routes';
 import fitbitRouter from './routes/fitbit.routes';
+import ouraRouter from './routes/oura.routes';
+import wearablesRouter from './routes/wearables.routes';
 import acmRouter from './routes/acm.routes';
 import questsRouter from './routes/quests.routes';
 import fastingRouter from './routes/fasting.routes';
@@ -28,6 +30,7 @@ import treasuryRouter from './routes/treasury.routes';
 import todoistRouter from './routes/todoist.routes';
 import { authMiddleware } from './middleware/auth.middleware';
 import { FitbitService } from './services/fitbit.service';
+import { OuraService } from './services/oura.service';
 import { getDataService } from './services/data/dataService';
 import { schedule as cronSchedule } from 'node-cron';
 
@@ -77,9 +80,10 @@ app.get('/health', (req, res) => {
 // Auth routes (no auth required for login)
 app.use('/api/auth', authRouter);
 
-// Fitbit routes — registered BEFORE global authMiddleware so /auth and /callback are reachable
-// without a token. /sleep/today and /status apply authMiddleware internally.
+// Fitbit + Oura OAuth — registered BEFORE global authMiddleware so /callback is reachable.
+// Protected sub-routes apply authMiddleware internally.
 app.use('/api/fitbit', fitbitRouter);
+app.use('/api/oura', ouraRouter);
 
 // Apply authentication middleware to all other API routes
 app.use('/api', authMiddleware);
@@ -92,6 +96,7 @@ app.use('/api/action-log', actionLogRouter);
 app.use('/api/daily-metrics', dailyMetricsRouter);
 app.use('/api/consume', consumeRouter);
 app.use('/api/food-estimate', foodEstimateRouter);
+app.use('/api/wearables', wearablesRouter);
 app.use('/api/acm', acmRouter);
 app.use('/api/quests', questsRouter);
 app.use('/api/fasting', fastingRouter);
@@ -186,17 +191,13 @@ httpServer.listen(PORT_NUMBER, '0.0.0.0', () => {
 });
 
 {
-  // Daily Fitbit sleep sync — 11:50pm CST every night
+  // Daily wearable sleep sync — 11:50pm CST (Oura preferred, Fitbit fallback)
+  const ouraCron = new OuraService();
   const fitbitCronService = new FitbitService();
 
   cronSchedule('50 23 * * *', async () => {
-    console.log('\n[CRON] ═══ Daily Fitbit sleep sync triggered ═══');
+    console.log('\n[CRON] ═══ Daily wearable sleep sync triggered ═══');
     console.log(`[CRON] Time: ${new Date().toISOString()}`);
-
-    if (!fitbitCronService.isConfigured()) {
-      console.warn('[CRON] ⚠ Fitbit not configured — skipping');
-      return;
-    }
 
     const ownerUserId = process.env.OWNER_USER_ID;
     if (!ownerUserId) {
@@ -213,14 +214,31 @@ httpServer.listen(PORT_NUMBER, '0.0.0.0', () => {
         return;
       }
 
-      const sleep = await fitbitCronService.getSleepData('today', ownerUserId);
-      console.log(`[CRON] ✅ Fetched sleep: score=${sleep.score} hrs=${sleep.hours}`);
+      let score = 0;
+      let hours = 0;
+      let provider = '';
 
+      if (ouraCron.isConfigured() && await ouraCron.hasTokens(ownerUserId)) {
+        const sleep = await ouraCron.getSleepData('today', ownerUserId);
+        score = sleep.score;
+        hours = sleep.hours;
+        provider = 'oura';
+      } else if (fitbitCronService.isConfigured()) {
+        const sleep = await fitbitCronService.getSleepData('today', ownerUserId);
+        score = sleep.score;
+        hours = sleep.hours;
+        provider = 'fitbit';
+      } else {
+        console.warn('[CRON] ⚠ No wearable configured — skipping');
+        return;
+      }
+
+      console.log(`[CRON] ✅ Fetched sleep (${provider}): score=${score} hrs=${hours}`);
       await db.upsertJournalEntry(ownerUserId, {
         user_id: ownerUserId,
         entry_date: today,
-        fitbit_score: sleep.score,
-        sleep_hours: sleep.hours,
+        fitbit_score: score,
+        sleep_hours: hours,
       });
       console.log('[CRON] ✅ Supabase journal_entries updated with sleep data');
     } catch (err) {
@@ -229,7 +247,7 @@ httpServer.listen(PORT_NUMBER, '0.0.0.0', () => {
     console.log('[CRON] ═══════════════════════════════════════════\n');
   }, { timezone: 'America/Chicago' });
 
-  console.log('[CRON] 📅 Daily Fitbit sleep sync scheduled at 11:50pm CST');
+  console.log('[CRON] 📅 Daily wearable sleep sync scheduled at 11:50pm CST (Oura → Fitbit)');
 }
 
 // Graceful shutdown
