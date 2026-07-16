@@ -11,6 +11,11 @@ import {
   normalizeDomains,
   suggestClassTemplate,
 } from '../services/classTemplates';
+import {
+  checkDemoRateLimit,
+  getConfiguredDemoUserId,
+  issueDemoSession,
+} from '../services/demo.service';
 
 const router = Router();
 
@@ -177,6 +182,51 @@ router.post('/login', async (req: Request, res: Response) => {
     refreshToken: data.session.refresh_token,
     message: 'Login successful',
   });
+});
+
+/**
+ * POST /api/auth/demo-login
+ * Public Try Demo — issues a session for DEMO_USER_ID (dedicated Auth user).
+ * Resets/reseeds fake Hunter data on each call. No shared password in the client.
+ */
+router.post('/demo-login', async (req: Request, res: Response) => {
+  const demoUserId = getConfiguredDemoUserId();
+  if (!demoUserId) {
+    return res.status(503).json({
+      success: false,
+      error: 'Demo is not configured (DEMO_USER_ID unset)',
+    });
+  }
+
+  const ip =
+    (typeof req.headers['x-forwarded-for'] === 'string'
+      ? req.headers['x-forwarded-for'].split(',')[0].trim()
+      : null) ||
+    req.ip ||
+    req.socket.remoteAddress ||
+    'unknown';
+
+  if (!checkDemoRateLimit(ip)) {
+    return res.status(429).json({
+      success: false,
+      error: 'Too many demo logins from this network — try again later',
+    });
+  }
+
+  try {
+    const session = await issueDemoSession(demoUserId);
+    return res.json({
+      success: true,
+      token: session.accessToken,
+      refreshToken: session.refreshToken,
+      message: 'Demo session ready',
+      demo: true,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Demo login failed';
+    const status = /not found|not equal OWNER/i.test(msg) ? 503 : 500;
+    return res.status(status).json({ success: false, error: msg });
+  }
 });
 
 /**

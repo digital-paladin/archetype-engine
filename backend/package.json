@@ -13,6 +13,7 @@
     "lint": "eslint src/**/*.ts",
     "seed:stats": "ts-node --transpile-only src/scripts/seed_character_stats.ts",
     "seed:quest-lines": "ts-node --transpile-only src/scripts/seed_quest_lines.ts",
+    "seed:demo": "ts-node --transpile-only src/scripts/seed_demo.ts",
     "patch:may17-stats": "ts-node --transpile-only src/scripts/patch_may17_character_stats.ts",
     "patch:owner-birth-date": "ts-node --transpile-only src/scripts/upsert_owner_birth_date.ts"
   },
