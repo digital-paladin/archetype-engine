@@ -38,7 +38,7 @@ export default defineConfig({
     // ── 2. Authed smoke tests (depend on setup) ─────────────────────────────
     {
       name: 'chromium',
-      testIgnore: ['**/global.setup.ts', '**/onboarding.spec.ts', '**/auth.spec.ts'],
+      testIgnore: ['**/global.setup.ts', '**/onboarding.spec.ts', '**/auth.spec.ts', '**/demo.spec.ts'],
       use: {
         ...devices['Desktop Chrome'],
         storageState: 'e2e/.auth/session.json',
@@ -49,7 +49,7 @@ export default defineConfig({
     // ── 3. Unauthed / onboarding flows (no saved session) ───────────────────
     {
       name: 'chromium-onboarding',
-      testMatch: ['**/onboarding.spec.ts', '**/auth.spec.ts'],
+      testMatch: ['**/onboarding.spec.ts', '**/auth.spec.ts', '**/demo.spec.ts'],
       use: {
         ...devices['Desktop Chrome'],
         storageState: { cookies: [], origins: [] },

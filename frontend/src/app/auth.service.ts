@@ -70,6 +70,35 @@ export class AuthService {
   }
 
   /**
+   * Public Try Demo — no credentials. Backend issues a session for DEMO_USER_ID.
+   */
+  async demoLogin(): Promise<LoginResponse> {
+    try {
+      const response = await firstValueFrom(
+        this.http.post<LoginResponse>(`${this.apiUrl}/api/auth/demo-login`, {})
+      );
+
+      if (response.success && response.token) {
+        this.setToken(response.token);
+        if (response.refreshToken) this.setRefreshToken(response.refreshToken);
+      }
+
+      return response;
+    } catch (error: any) {
+      const status = error.status as number | undefined;
+      let errorMessage = error.error?.error || error.message || 'Demo login failed';
+      if (status === 503) {
+        errorMessage = error.error?.error || 'Demo is not available yet.';
+      } else if (status === 429) {
+        errorMessage = 'Too many demo logins — try again later.';
+      } else if (status === 0) {
+        errorMessage = 'Cannot connect to backend. Check that the API is running.';
+      }
+      return { success: false, error: errorMessage };
+    }
+  }
+
+  /**
    * Thin onboarding signup — email + password + birthDate + optional identity scaffold.
    */
   async signup(

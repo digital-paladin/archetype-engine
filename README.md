@@ -139,8 +139,12 @@ archetype-engine/
 
 Login uses **Supabase Auth** (email + password). The login screen also supports:
 
+- **Try demo** — one-click session for a dedicated demo Hunter (no shared passwords; requires `DEMO_USER_ID` on the backend)
 - **Forgot password** — sends a recovery email; link lands on `/auth/callback` → `/reset-password`
 - **Magic link** — passwordless one-time sign-in email
+- **Create account** — thin signup with birth date (Overall Level = chronological age)
+
+**Live app:** use **Try demo** on the login page, or **Create account**. Do not publish demo credentials in this README.
 
 ### Supabase URL configuration (required)
 
@@ -204,10 +208,11 @@ See [`backend/.env.example`](./backend/.env.example) for the full reference with
 | `SUPABASE_URL` | Yes | Your Supabase project URL |
 | `SUPABASE_ANON_KEY` | Yes | Supabase anon/public key |
 | `SUPABASE_SERVICE_ROLE_KEY` | Yes (backend only) | Service role key — never expose to frontend |
+| `DEMO_USER_ID` | No (needed for Try demo) | UUID of dedicated demo Auth user — never the Owner |
 | `CHARACTER_FILE_PATH` | Yes | Absolute path to your `character-sheet.md` |
 | `JOURNAL_PATH` | Yes | Absolute path to your daily journal markdown |
-| `AUTH_USERNAME` | Yes | Dashboard login username |
-| `AUTH_PASSWORD` | Yes | Dashboard login password |
+| `AUTH_USERNAME` | Legacy | Unused when Supabase Auth is configured |
+| `AUTH_PASSWORD` | Legacy | Unused when Supabase Auth is configured |
 | `OWNER_EMAIL` | Yes (scripts) | Your Supabase auth email — used by seed/migrate scripts |
 | `PLAYER_BIRTH_DATE` | No* | `YYYY-MM-DD` — Overall Character Level = chronological age. *Set on Railway; do not commit a real DOB. |
 | `FITBIT_CLIENT_ID` | No | Enables automatic sleep/nutrition sync |

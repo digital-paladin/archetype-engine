@@ -64,6 +64,16 @@ type LoginMode = 'login' | 'signup' | 'forgot' | 'magic';
               {{ isBusy() ? 'Logging in…' : 'Login' }}
             </button>
 
+            <button
+              type="button"
+              id="try-demo"
+              class="demo-button"
+              [disabled]="isBusy()"
+              (click)="onDemoLogin()"
+            >
+              {{ isBusy() ? 'Opening demo…' : 'Try demo' }}
+            </button>
+
             <div class="auth-links">
               <button type="button" class="text-link" (click)="setMode('signup')">
                 Create account
@@ -397,6 +407,26 @@ type LoginMode = 'login' | 'signup' | 'forgot' | 'magic';
     }
     .login-button:disabled { opacity: 0.38; cursor: not-allowed; }
 
+    .demo-button {
+      width: 100%;
+      margin-top: 10px;
+      background: transparent;
+      border: 1px solid rgba(155,115,38,0.45);
+      color: #a08858;
+      font-family: 'Cinzel', serif;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      padding: 11px;
+      cursor: pointer;
+    }
+    .demo-button:hover:not(:disabled) {
+      border-color: #c9a84c;
+      color: #f2c96a;
+    }
+    .demo-button:disabled { opacity: 0.38; cursor: not-allowed; }
+
     .auth-links {
       display: flex;
       justify-content: center;
@@ -543,6 +573,25 @@ export class LoginComponent {
         this.router.navigate(['/dashboard']);
       } else {
         this.errorMessage.set(result.error || 'Login failed');
+      }
+    } catch (error: any) {
+      this.errorMessage.set(error.message || 'Network error. Please try again.');
+    } finally {
+      this.isBusy.set(false);
+    }
+  }
+
+  async onDemoLogin(): Promise<void> {
+    this.isBusy.set(true);
+    this.errorMessage.set('');
+    this.successMessage.set('');
+
+    try {
+      const result = await this.authService.demoLogin();
+      if (result.success) {
+        this.router.navigate(['/dashboard']);
+      } else {
+        this.errorMessage.set(result.error || 'Demo login failed');
       }
     } catch (error: any) {
       this.errorMessage.set(error.message || 'Network error. Please try again.');
