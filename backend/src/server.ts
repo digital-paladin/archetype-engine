@@ -31,11 +31,13 @@ import { rewardsCatalogRouter } from './routes/rewardsCatalog.routes';
 import inventoryRouter from './routes/inventory.routes';
 import treasuryRouter from './routes/treasury.routes';
 import todoistRouter from './routes/todoist.routes';
+import abstinenceRouter from './routes/abstinence.routes';
 import { authMiddleware } from './middleware/auth.middleware';
 import { requireTier } from './middleware/requireTier.middleware';
 import { FitbitService } from './services/fitbit.service';
 import { OuraService } from './services/oura.service';
 import { getDataService } from './services/data/dataService';
+import { runDailyIncrement } from './services/abstinence.service';
 import { schedule as cronSchedule } from 'node-cron';
 
 // Load environment variables
@@ -118,6 +120,7 @@ app.use('/api/rewards-catalog', rewardsCatalogRouter);
 app.use('/api/treasury', treasuryRouter);
 app.use('/api/inventory', inventoryRouter);
 app.use('/api/todoist', todoistRouter);
+app.use('/api/abstinence', abstinenceRouter);
 
 // GET /api/journal/today — ensure today's entry exists in Supabase, return status
 app.get('/api/journal/today', authMiddleware, async (req: Request, res: Response) => {
@@ -258,6 +261,27 @@ httpServer.listen(PORT_NUMBER, '0.0.0.0', () => {
   }, { timezone: 'America/Chicago' });
 
   console.log('[CRON] 📅 Daily wearable sleep sync scheduled at 11:50pm CST (Oura → Fitbit)');
+}
+
+{
+  // Phase 2.10 — midnight abstinence streak increment (America/Chicago)
+  cronSchedule('5 0 * * *', async () => {
+    console.log('\n[CRON] ═══ Abstinence streak daily increment ═══');
+    try {
+      const result = await runDailyIncrement();
+      console.log(
+        `[CRON] ✅ abstinence scanned=${result.scanned} incremented=${result.incremented} new_records=${result.new_records.length}`,
+      );
+      for (const nr of result.new_records) {
+        console.log(`[CRON] 🏆 new-record user=${nr.user_id} item=${nr.item_index} day=${nr.streak}`);
+      }
+    } catch (err) {
+      console.error(`[CRON] ❌ Abstinence increment failed: ${err instanceof Error ? err.message : err}`);
+    }
+    console.log('[CRON] ═══════════════════════════════════════════\n');
+  }, { timezone: 'America/Chicago' });
+
+  console.log('[CRON] 📅 Abstinence streak increment scheduled at 12:05am CST');
 }
 
 // Graceful shutdown

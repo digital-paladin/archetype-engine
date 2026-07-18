@@ -6,6 +6,7 @@
 import { getSupabaseAdmin, getSupabaseAuth } from '../lib/supabase';
 import { getDataService } from './data/dataService';
 import { STARTER_CLASS_NAMES } from './onboarding.service';
+import { seedAbstinenceStreaks } from './abstinence.service';
 
 /** Synthetic DOB → Overall Level ≈ age (not Owner sheet). */
 export const DEMO_BIRTH_DATE = '1998-06-15';
@@ -30,6 +31,7 @@ const MUTABLE_TABLES = [
   'xp_history',
   'daily_journal_entries',
   'acm_entries',
+  'abstinence_streaks',
   'quest_entries',
   'quest_lines',
   'activity_log',
@@ -133,6 +135,9 @@ export async function seedDemoHunter(userId: string, email: string): Promise<voi
       sort_order: 0,
     },
   ]);
+
+  // Mid-streak fake counters so Try demo shows Phase 2.10 UI
+  await seedAbstinenceStreaks(userId, { currentStreak: 12, longestStreak: 21 });
 }
 
 /**

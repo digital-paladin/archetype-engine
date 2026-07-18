@@ -19,6 +19,28 @@ interface AcmData {
 }
 interface HrZone { name: string; minutes: number; min: number; max: number; }
 
+interface AbstinenceStreakView {
+  item_index: number;
+  current_streak: number;
+  longest_streak: number;
+  last_break_date: string | null;
+  last_break_type: string | null;
+  broke_today: boolean;
+  amcc_label: string;
+  amcc_tooltip: string;
+  resistance_events: Array<{ date: string; note: string }>;
+  break_log: unknown[];
+}
+
+interface BreakModalState {
+  item_index: number;
+  streak_at_break: number;
+  compound: boolean;
+}
+
+/** ACM indices that use streak counters instead of checkboxes (Phase 2.10). */
+const ABSTINENCE_INDICES = new Set([0, 10]);
+
 const ITEM_LABELS = [
   'Alcohol Sobriety', 'Wake Up With God', 'Physical Training',
   'Deep Work: Dev',   'Deep Work: RedTeam', 'Deep Work: Artist',
@@ -104,7 +126,64 @@ const STAT_META = [
             </div>
           </div>
 
-          <!-- ── 12 Discipline Checkboxes ── -->
+          <!-- ── Abstinence streak counters (Phase 2.10) ── -->
+          <div class="abstinence-section" *ngIf="abstinenceStreaks().length > 0">
+            <h4 class="disciplines-title">Abstinence Counters</h4>
+            <div class="abstinence-grid">
+              <div class="abstinence-card" *ngFor="let s of abstinenceStreaks()" [attr.data-item-index]="s.item_index">
+                <div class="abs-title-row">
+                  <span class="abs-shield">🛡</span>
+                  <span class="abs-label">{{ abstinenceLabel(s.item_index) }}</span>
+                </div>
+                <div class="abs-day">Day {{ s.current_streak }}</div>
+                <div class="abs-bar-track" [title]="'Longest: ' + s.longest_streak">
+                  <div class="abs-bar-fill"
+                       [style.width.%]="streakBarPct(s)">
+                  </div>
+                </div>
+                <div class="abs-longest">longest: {{ s.longest_streak }}</div>
+                <div class="abs-amcc" [title]="s.amcc_tooltip">{{ s.amcc_label }}</div>
+
+                <button
+                  type="button"
+                  class="abs-break-btn"
+                  *ngIf="isViewingToday && !s.broke_today"
+                  [disabled]="isUpdating()"
+                  (click)="openBreakConfirm(s)">
+                  Streak broken today ✕
+                </button>
+                <div class="abs-broke-badge" *ngIf="s.broke_today">Streak reset today</div>
+
+                <button type="button" class="abs-toggle-log" (click)="toggleResistanceOpen(s.item_index)">
+                  {{ resistanceOpen().has(s.item_index) ? '▼' : '▶' }}
+                  {{ s.resistance_events.length }} resistance win{{ s.resistance_events.length === 1 ? '' : 's' }} logged
+                </button>
+                <div class="abs-resistance" *ngIf="resistanceOpen().has(s.item_index)">
+                  <div class="abs-win" *ngFor="let ev of recentWins(s)">
+                    <span class="abs-win-date">{{ ev.date }}</span>
+                    <span class="abs-win-note">{{ ev.note }}</span>
+                  </div>
+                  <div class="abs-log-form" *ngIf="isViewingToday">
+                    <textarea
+                      class="abs-note"
+                      rows="2"
+                      maxlength="280"
+                      [attr.data-note-for]="s.item_index"
+                      placeholder="Log a resistance win (optional)"></textarea>
+                    <button
+                      type="button"
+                      class="abs-log-btn"
+                      [disabled]="isUpdating()"
+                      (click)="submitResistance(s.item_index)">
+                      + Log a resistance win
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ── Daily Disciplines (non-abstinence checkboxes) ── -->
           <div class="disciplines-section">
             <h4 class="disciplines-title">Daily Disciplines</h4>
             <div class="disciplines-grid">
@@ -112,12 +191,47 @@ const STAT_META = [
                 *ngFor="let label of itemLabels; let i = index"
                 class="disc-item"
                 [class.disc-checked]="data()!.itemStates[i]"
-                [disabled]="isUpdating()"
+                [class.disc-hidden]="isAbstinenceIndex(i)"
+                [disabled]="isUpdating() || isAbstinenceIndex(i)"
                 (click)="toggleItem(i)">
                 <span class="disc-check">{{ data()!.itemStates[i] ? '✓' : '○' }}</span>
                 <span class="disc-label">{{ label }}</span>
               </button>
             </div>
+          </div>
+
+          <!-- Break confirmation modal -->
+          <div class="abs-modal-backdrop" *ngIf="breakModal()" (click)="closeBreakModal()">
+            <div class="abs-modal" (click)="$event.stopPropagation()" role="dialog" aria-modal="true">
+              <ng-container *ngIf="breakModal() as m">
+                <h4 class="abs-modal-title" *ngIf="!m.compound">Reset streak?</h4>
+                <h4 class="abs-modal-title compound" *ngIf="m.compound">Compound break warning</h4>
+                <p class="abs-modal-body" *ngIf="!m.compound">
+                  Reset streak from Day {{ m.streak_at_break }} to Day 0? This cannot be undone.
+                </p>
+                <p class="abs-modal-body" *ngIf="m.compound">
+                  You already broke another abstinence discipline today.
+                  A second break the same day is a compound AVE cascade —
+                  override cost rises superlinearly. Confirm only if this is accurate.
+                  Resetting {{ abstinenceLabel(m.item_index) }} from Day {{ m.streak_at_break }} → 0.
+                </p>
+                <div class="abs-modal-actions">
+                  <button type="button" class="abs-modal-cancel" (click)="closeBreakModal()">Cancel</button>
+                  <button
+                    type="button"
+                    class="abs-modal-confirm"
+                    [disabled]="isUpdating()"
+                    (click)="confirmBreak()">
+                    Confirm — streak broken
+                  </button>
+                </div>
+              </ng-container>
+            </div>
+          </div>
+
+          <!-- New personal record toast -->
+          <div class="abs-record" *ngIf="newRecordMsg()" (click)="newRecordMsg.set(null)">
+            {{ newRecordMsg() }}
           </div>
 
           <!-- ── Physical Activity Breakdown ── -->
@@ -341,6 +455,138 @@ const STAT_META = [
     }
     .disc-item.disc-checked .disc-check { color: #4caf6e; }
     .disc-label { font-size: 10px; line-height: 1.3; }
+    .disc-item.disc-hidden { display: none; }
+    /* ── Abstinence counters ── */
+    .abstinence-section {
+      background: rgba(200,168,75,0.04);
+      border: 1px solid rgba(200,168,75,0.25);
+      border-radius: 6px;
+      padding: 12px;
+    }
+    .abstinence-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    @media (max-width: 720px) {
+      .abstinence-grid { grid-template-columns: 1fr; }
+    }
+    .abstinence-card {
+      background: rgba(0,0,0,0.25);
+      border: 1px solid #3a3a5a;
+      border-radius: 6px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .abs-title-row { display: flex; align-items: center; gap: 6px; }
+    .abs-shield { font-size: 14px; }
+    .abs-label { font-size: 12px; font-weight: 600; color: #e0d5c0; }
+    .abs-day { font-size: 28px; font-weight: 700; color: #c8a84b; letter-spacing: 0.04em; }
+    .abs-bar-track {
+      height: 8px;
+      background: rgba(255,255,255,0.08);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .abs-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #4caf6e, #c8a84b);
+      border-radius: 4px;
+      min-width: 2px;
+    }
+    .abs-longest { font-size: 10px; color: #888; }
+    .abs-amcc { font-size: 11px; color: #9a8acc; cursor: help; }
+    .abs-break-btn {
+      margin-top: 4px;
+      background: rgba(224,92,68,0.12);
+      border: 1px solid #e05c44;
+      color: #e05c44;
+      border-radius: 4px;
+      padding: 6px 8px;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .abs-break-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .abs-broke-badge { font-size: 11px; color: #e05c44; font-style: italic; }
+    .abs-toggle-log {
+      background: transparent;
+      border: none;
+      color: #888;
+      font-size: 11px;
+      text-align: left;
+      padding: 4px 0;
+      cursor: pointer;
+    }
+    .abs-resistance { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+    .abs-win { display: flex; flex-direction: column; gap: 2px; font-size: 11px; }
+    .abs-win-date { color: #c8a84b; }
+    .abs-win-note { color: #b0a89a; }
+    .abs-note {
+      width: 100%;
+      box-sizing: border-box;
+      background: rgba(0,0,0,0.35);
+      border: 1px solid #3a3a5a;
+      border-radius: 4px;
+      color: #e0d5c0;
+      font-size: 11px;
+      padding: 6px;
+      resize: vertical;
+    }
+    .abs-log-btn {
+      background: rgba(76,175,110,0.12);
+      border: 1px solid #4caf6e;
+      color: #4caf6e;
+      border-radius: 4px;
+      padding: 5px 8px;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .abs-modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.65);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 2000;
+      padding: 16px;
+    }
+    .abs-modal {
+      max-width: 420px;
+      width: 100%;
+      background: #141428;
+      border: 1px solid #c8a84b;
+      border-radius: 8px;
+      padding: 18px;
+    }
+    .abs-modal-title { margin: 0 0 8px; color: #e0d5c0; font-size: 16px; }
+    .abs-modal-title.compound { color: #e05c44; }
+    .abs-modal-body { margin: 0 0 14px; color: #b0a89a; font-size: 13px; line-height: 1.45; }
+    .abs-modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+    .abs-modal-cancel, .abs-modal-confirm {
+      border-radius: 4px;
+      padding: 7px 12px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .abs-modal-cancel { background: transparent; border: 1px solid #555; color: #aaa; }
+    .abs-modal-confirm { background: rgba(224,92,68,0.2); border: 1px solid #e05c44; color: #e05c44; }
+    .abs-record {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: #1a1a32;
+      border: 1px solid #c8a84b;
+      color: #c8a84b;
+      padding: 12px 16px;
+      border-radius: 8px;
+      z-index: 2100;
+      font-size: 13px;
+      cursor: pointer;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+    }
     /* ── Heart Rate ── */
     .activity-breakdown {
       background: rgba(255,255,255,0.04);
@@ -435,9 +681,14 @@ export class AcmPanelComponent implements OnInit, OnChanges {
   caloriesOut        = signal<number | null>(null);
   isLoading          = signal(true);
   isUpdating         = signal(false);
+  abstinenceStreaks  = signal<AbstinenceStreakView[]>([]);
+  resistanceOpen     = signal<Set<number>>(new Set());
+  breakModal         = signal<BreakModalState | null>(null);
+  newRecordMsg       = signal<string | null>(null);
 
   private readonly http       = inject(HttpClient);
   private readonly willpower  = inject(WillpowerService);
+  private prevStreakSnapshot = new Map<number, number>();
 
   /** WP cost per discipline checked (12 items × 6 = up to 72 WP drained per full day) */
   private static readonly WP_PER_ITEM = 6;
@@ -480,14 +731,23 @@ export class AcmPanelComponent implements OnInit, OnChanges {
                     .pipe(catchError(() => of(null))),
       vitals:     this.http.get<any>(`${environment.apiUrl}/api/fitbit/vitals/today?date=${today}`)
                     .pipe(catchError(() => of(null))),
+      abstinence: this.http.get<{ success: boolean; streaks: AbstinenceStreakView[] }>(
+                    `${environment.apiUrl}/api/abstinence/streaks`,
+                  ).pipe(catchError(() => of(null))),
     }).subscribe({
-      next: ({ acm, activities, nutrition, vitals }) => {
+      next: ({ acm, activities, nutrition, vitals, abstinence }) => {
         if (acm.success) {
           this.data.set(acm);
           if (this.isViewingToday) {
             this.syncWillpowerToAcm(acm.completedCount ?? 0);
           }
           this.autoCheckFromFitbit(acm, nutrition, vitals);
+        }
+        if (abstinence?.success && Array.isArray(abstinence.streaks)) {
+          this.applyStreaks(abstinence.streaks);
+          if (this.isViewingToday && acm.success) {
+            this.syncAbstinenceAcmChecks(acm, abstinence.streaks);
+          }
         }
         if (activities?.success) {
           this.restingHR.set(activities.restingHR ?? null);
@@ -505,6 +765,200 @@ export class AcmPanelComponent implements OnInit, OnChanges {
         this.isLoading.set(false);
       },
     });
+  }
+
+  isAbstinenceIndex(index: number): boolean {
+    return ABSTINENCE_INDICES.has(index);
+  }
+
+  abstinenceLabel(index: number): string {
+    return ITEM_LABELS[index] ?? `Item ${index}`;
+  }
+
+  streakBarPct(s: AbstinenceStreakView): number {
+    const longest = Math.max(s.longest_streak, 1);
+    return Math.min(100, Math.round((s.current_streak / longest) * 100));
+  }
+
+  recentWins(s: AbstinenceStreakView): Array<{ date: string; note: string }> {
+    return [...s.resistance_events].reverse().slice(0, 5);
+  }
+
+  toggleResistanceOpen(itemIndex: number): void {
+    const next = new Set(this.resistanceOpen());
+    if (next.has(itemIndex)) next.delete(itemIndex);
+    else next.add(itemIndex);
+    this.resistanceOpen.set(next);
+  }
+
+  openBreakConfirm(s: AbstinenceStreakView): void {
+    // Pre-check compound: sibling already broke today
+    const compound = this.abstinenceStreaks().some(
+      (x) => x.item_index !== s.item_index && x.broke_today,
+    );
+    this.breakModal.set({
+      item_index: s.item_index,
+      streak_at_break: s.current_streak,
+      compound,
+    });
+  }
+
+  closeBreakModal(): void {
+    this.breakModal.set(null);
+  }
+
+  confirmBreak(): void {
+    const modal = this.breakModal();
+    const current = this.data();
+    if (!modal || !current || this.isUpdating()) return;
+
+    this.isUpdating.set(true);
+    this.http
+      .post<{
+        success: boolean;
+        compound_break: boolean;
+        streak: AbstinenceStreakView;
+        error?: string;
+      }>(`${environment.apiUrl}/api/abstinence/break`, {
+        item_index: modal.item_index,
+        break_type: 'unscheduled',
+      })
+      .subscribe({
+        next: (res) => {
+          if (res.success && res.streak) {
+            this.abstinenceStreaks.update((list) =>
+              list.map((s) => (s.item_index === res.streak.item_index ? res.streak : s)),
+            );
+            // Mirror ACM checkbox off for the broken discipline
+            const newStates = [...current.itemStates];
+            newStates[modal.item_index] = false;
+            this.http
+              .post(`${environment.apiUrl}/api/action-log`, {
+                date: this.viewingDate,
+                actionItems: newStates,
+              })
+              .subscribe({
+                next: () => {
+                  this.http.get<AcmData>(`${environment.apiUrl}/api/acm/today?date=${this.viewingDate}`).subscribe({
+                    next: (fresh) => {
+                      if (fresh.success) {
+                        this.data.set(fresh);
+                        this.syncWillpowerToAcm(fresh.completedCount ?? 0);
+                      }
+                      this.isUpdating.set(false);
+                      this.closeBreakModal();
+                    },
+                    error: () => {
+                      this.isUpdating.set(false);
+                      this.closeBreakModal();
+                    },
+                  });
+                },
+                error: () => {
+                  this.isUpdating.set(false);
+                  this.closeBreakModal();
+                },
+              });
+          } else {
+            this.isUpdating.set(false);
+            this.closeBreakModal();
+          }
+        },
+        error: (err) => {
+          console.error('[ACM] abstinence break failed:', err);
+          this.isUpdating.set(false);
+        },
+      });
+  }
+
+  submitResistance(itemIndex: number): void {
+    const el = document.querySelector(
+      `textarea[data-note-for="${itemIndex}"]`,
+    ) as HTMLTextAreaElement | null;
+    const note = (el?.value ?? '').trim();
+    if (!note || this.isUpdating()) return;
+
+    this.isUpdating.set(true);
+    this.http
+      .post<{ success: boolean; streak: AbstinenceStreakView }>(
+        `${environment.apiUrl}/api/abstinence/resistance-event`,
+        { item_index: itemIndex, note },
+      )
+      .subscribe({
+        next: (res) => {
+          if (res.success && res.streak) {
+            this.abstinenceStreaks.update((list) =>
+              list.map((s) => (s.item_index === res.streak.item_index ? res.streak : s)),
+            );
+            if (el) el.value = '';
+          }
+          this.isUpdating.set(false);
+        },
+        error: (err) => {
+          console.error('[ACM] resistance event failed:', err);
+          this.isUpdating.set(false);
+        },
+      });
+  }
+
+  private applyStreaks(streaks: AbstinenceStreakView[]): void {
+    for (const s of streaks) {
+      const prev = this.prevStreakSnapshot.get(s.item_index);
+      if (
+        prev != null &&
+        s.current_streak > prev &&
+        s.current_streak === s.longest_streak &&
+        s.current_streak > 0
+      ) {
+        this.newRecordMsg.set(
+          `New Record — Day ${s.current_streak} 🏆  Previous best: ${Math.max(0, s.current_streak - 1)}`,
+        );
+        setTimeout(() => this.newRecordMsg.set(null), 8000);
+      }
+      this.prevStreakSnapshot.set(s.item_index, s.current_streak);
+    }
+    this.abstinenceStreaks.set(streaks);
+  }
+
+  /** Keep ACM itemStates for abstinence indices aligned with broke_today. */
+  private syncAbstinenceAcmChecks(acm: AcmData, streaks: AbstinenceStreakView[]): void {
+    const newStates = [...acm.itemStates];
+    let changed = false;
+    for (const s of streaks) {
+      const shouldCheck = !s.broke_today;
+      if (newStates[s.item_index] !== shouldCheck) {
+        newStates[s.item_index] = shouldCheck;
+        changed = true;
+      }
+    }
+    if (!changed) return;
+
+    const newCount = newStates.filter(Boolean).length;
+    this.data.update((d) => (d ? { ...d, itemStates: newStates, completedCount: newCount } : d));
+    this.saveAcmSyncBaseline(newCount);
+
+    if (this.isUpdating()) return;
+    this.isUpdating.set(true);
+    this.http
+      .post(`${environment.apiUrl}/api/action-log`, {
+        date: this.viewingDate,
+        actionItems: newStates,
+      })
+      .subscribe({
+        next: () => {
+          this.http.get<AcmData>(`${environment.apiUrl}/api/acm/today?date=${this.viewingDate}`).subscribe({
+            next: (fresh) => {
+              if (fresh.success) {
+                this.data.set(fresh);
+                this.syncWillpowerToAcm(fresh.completedCount ?? 0);
+              }
+              this.isUpdating.set(false);
+            },
+            error: () => this.isUpdating.set(false),
+          });
+        },
+        error: () => this.isUpdating.set(false),
+      });
   }
 
   private autoCheckFromFitbit(acm: AcmData, nutrition: any, vitals: any): void {
@@ -568,6 +1022,7 @@ export class AcmPanelComponent implements OnInit, OnChanges {
   toggleItem(index: number): void {
     const current = this.data();
     if (!current || this.isUpdating()) return;
+    if (this.isAbstinenceIndex(index)) return; // counters own these indices
 
     // Optimistic update
     const newStates = [...current.itemStates];

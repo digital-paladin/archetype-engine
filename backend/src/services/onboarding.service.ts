@@ -5,6 +5,7 @@ import {
   normalizeDomains,
   suggestClassTemplate,
 } from './classTemplates';
+import { seedAbstinenceStreaks } from './abstinence.service';
 
 /** Default skill trees for a new Hunter (thin onboarding slice). */
 export const STARTER_CLASS_NAMES = [
@@ -119,6 +120,8 @@ export async function provisionNewUser(params: {
     acm_metrics: {},
     rpg_stats,
   });
+
+  await seedAbstinenceStreaks(userId);
 }
 
 export async function getUserBirthDate(userId: string): Promise<string | null> {

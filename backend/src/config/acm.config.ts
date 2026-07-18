@@ -42,3 +42,22 @@ export const ACTION_ITEMS_LABELS: string[] = [
 
 /** Derived count — never hardcode this number directly */
 export const ACM_ITEM_COUNT: number = ACTION_ITEMS_LABELS.length;
+
+/**
+ * ACM indices that render as streak counters (Phase 2.10), not checkboxes.
+ * Keep in sync with frontend ABSTINENCE_INDICES in acm-panel.component.ts.
+ */
+export const ABSTINENCE_ITEM_INDICES: readonly number[] = [0, 10] as const;
+
+export function isAbstinenceItem(index: number): boolean {
+  return ABSTINENCE_ITEM_INDICES.includes(index);
+}
+
+/** aMCC resistance intensity labels shown on counter cards */
+export const ABSTINENCE_AMCC_LABELS: Record<number, string> = {
+  0: '+aMCC  Very High resistance',
+  10: '+aMCC  High resistance',
+};
+
+export const ABSTINENCE_AMCC_TOOLTIP =
+  'Each streak day is a resistance override event. Domain intensity determines the aMCC stimulus per day. Maintained streaks build structural override capacity that transfers across all disciplines.';
