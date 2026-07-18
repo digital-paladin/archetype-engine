@@ -140,6 +140,7 @@ archetype-engine/
 Login uses **Supabase Auth** (email + password). The login screen also supports:
 
 - **Try demo** — one-click session for a dedicated demo Hunter (no shared passwords; requires `DEMO_USER_ID` on the backend)
+- **Abstinence counters** — ACM alcohol/sexual items as day streaks (`/api/abstinence/*`; apply migration `004_abstinence_streaks.sql`)
 - **Forgot password** — sends a recovery email; link lands on `/auth/callback` → `/reset-password`
 - **Magic link** — passwordless one-time sign-in email
 - **Create account** — thin signup with birth date (Overall Level = chronological age)
