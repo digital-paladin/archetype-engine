@@ -1,7 +1,7 @@
 {
-  "name": "digital-paladin-backend",
+  "name": "archetype-engine-backend",
   "version": "1.0.0",
-  "description": "Backend API for Digital Paladin character progression system",
+  "description": "Backend API for Archetype Engine character progression system",
   "main": "dist/server.js",
   "scripts": {
     "dev": "nodemon --exec \"ts-node -r dotenv/config\" src/server.ts",

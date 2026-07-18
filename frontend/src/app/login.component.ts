@@ -14,7 +14,7 @@ type LoginMode = 'login' | 'signup' | 'forgot' | 'magic';
     <div class="login-container">
       <div class="login-card">
         <div class="login-header">
-          <h1>🛡️ Digital Paladin</h1>
+          <h1>🛡️ Archetype Engine</h1>
           <p>Character Progression Tracker</p>
         </div>
 

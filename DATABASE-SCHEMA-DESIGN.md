@@ -1,4 +1,4 @@
-# Digital Paladin — Database Schema Design
+# Archetype Engine — Database Schema Design
 **Phase 0 Deliverable** · Generated May 15, 2026
 
 This document is the output of the Phase 0 foundation audit. It catalogs every file system

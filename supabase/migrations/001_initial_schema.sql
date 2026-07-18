@@ -1,5 +1,5 @@
 -- ============================================================
--- Digital Paladin — Initial Schema
+-- Archetype Engine — Initial Schema
 -- Migration: 001_initial_schema.sql
 -- Run this in Supabase SQL Editor (Project → SQL Editor → New query)
 -- ============================================================

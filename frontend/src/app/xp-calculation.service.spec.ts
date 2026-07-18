@@ -1,5 +1,5 @@
 // xp-calculation.service.spec.ts
-// Unit tests for XpCalculationService — validates Digital Paladin XP formulas
+// Unit tests for XpCalculationService — validates Archetype Engine XP formulas
 
 import { TestBed } from '@angular/core/testing';
 import { XpCalculationService, XPCalculation } from './xp-calculation.service';

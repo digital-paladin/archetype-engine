@@ -80,7 +80,7 @@ const NAV_TABS: { id: PanelId; icon: string; label: string }[] = [
         <div class="eso-title-group">
           <span class="eso-title-ornament">◈</span>
           <div class="eso-title-stack">
-            <h1 class="eso-character-title">Digital Paladin</h1>
+            <h1 class="eso-character-title">Archetype Engine</h1>
             <span class="eso-title-sub">Character Progression</span>
           </div>
         </div>
@@ -245,7 +245,7 @@ const NAV_TABS: { id: PanelId; icon: string; label: string }[] = [
             <h3 class="eso-panel-title">Character</h3>
             <app-character-display
                 [characterLevel]="overallLevelInfo()?.level ?? 32"
-                [characterName]="'Digital Paladin'"
+                [characterName]="'Your Archetype'"
                 [currentXP]="daysElapsed()"
                 [maxXP]="365"
                 [xpPercentage]="levelPct()">
