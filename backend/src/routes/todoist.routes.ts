@@ -96,6 +96,7 @@ router.post('/tasks/with-subtasks', async (req: Request, res: Response) => {
 /**
  * PATCH /api/todoist/tasks/:id
  * Update a task (content, description, priority, due_string, labels)
+ * Note: project/section/parent moves use POST /tasks/:id/move — not this endpoint.
  */
 router.patch('/tasks/:id', async (req: Request, res: Response) => {
   try {
@@ -106,6 +107,24 @@ router.patch('/tasks/:id', async (req: Request, res: Response) => {
   } catch (err: any) {
     console.error('[TODOIST] PATCH /tasks/:id error:', err.message);
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/todoist/tasks/:id/move
+ * Move a task to a different project, section, or parent (api/v1 dedicated endpoint).
+ * Body: exactly one of { project_id } | { section_id } | { parent_id }
+ */
+router.post('/tasks/:id/move', async (req: Request, res: Response) => {
+  try {
+    const todoist = getTodoistService();
+    const task = await todoist.moveTask(req.params.id, req.body);
+    console.log(`[TODOIST] Moved task id=${req.params.id}`);
+    res.json({ success: true, task });
+  } catch (err: any) {
+    console.error('[TODOIST] POST /tasks/:id/move error:', err.message);
+    const status = err.message?.includes('exactly one') ? 400 : 500;
+    res.status(status).json({ success: false, error: err.message });
   }
 });
 
