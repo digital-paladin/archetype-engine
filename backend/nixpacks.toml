@@ -1,4 +1,4 @@
-# nixpacks.toml — Railway build configuration for digital-paladin backend
+# nixpacks.toml — Railway build configuration for archetype-engine backend
 # Ensures TypeScript is compiled on every deploy (no cached stale dist/)
 
 [phases.build]

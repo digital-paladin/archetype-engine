@@ -1,4 +1,4 @@
-# Digital Paladin Backend
+# Archetype Engine Backend
 
 Node.js + Express backend that parses `character-sheet.md` and serves character data via REST API + WebSocket.
 

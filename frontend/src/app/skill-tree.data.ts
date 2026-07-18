@@ -1,5 +1,5 @@
 /**
- * Skill Tree Data — Digital Paladin Gamification System
+ * Skill Tree Data — Archetype Engine Gamification System
  *
  * Each high-level activity (RedTeam, MMA, Strength, etc.) is broken down
  * into tangible techniques that can be individually unlocked and leveled.

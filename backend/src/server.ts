@@ -82,7 +82,7 @@ app.get('/health', (req, res) => {
   res.json({ 
     status: 'OK', 
     timestamp: new Date().toISOString(),
-    service: 'Digital Paladin Backend'
+    service: 'Archetype Engine Backend'
   });
 });
 

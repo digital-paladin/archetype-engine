@@ -17,7 +17,7 @@ import { LevelProgressionService, SkillClass, LevelUpResult } from './level-prog
   template: `
     <div class="xp-calculator">
       <div class="calculator-header">
-        <h2>⚔️ Digital Paladin XP Calculator</h2>
+        <h2>⚔️ Archetype Engine XP Calculator</h2>
         <p class="subtitle">Test XP formulas from character-sheet.md</p>
       </div>
 

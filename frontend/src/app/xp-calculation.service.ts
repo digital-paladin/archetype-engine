@@ -2,7 +2,7 @@ import { Injectable } from '@angular/core';
 
 /**
  * XP Calculation Service
- * Implements Digital Paladin character-sheet.md XP formulas
+ * Implements Archetype Engine character-sheet.md XP formulas
  * Base Formula: Pending XP = (hours × base_rate × intensity_multiplier) + bonuses
  */
 

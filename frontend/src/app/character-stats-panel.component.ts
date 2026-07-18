@@ -81,7 +81,7 @@ const TIER_CLASS: Record<string, string> = {
       <div class="cs-char-banner">
         <span class="cs-char-glyph">⚔</span>
         <div class="cs-char-info">
-          <div class="cs-char-name">Digital Paladin</div>
+          <div class="cs-char-name">Your Archetype</div>
           <div class="cs-char-class">
             {{ primaryClass()?.name ?? 'Adventurer' }}
             <span *ngIf="primaryClass()"> — Level {{ primaryClass()!.level }}</span>

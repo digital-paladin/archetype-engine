@@ -245,7 +245,7 @@ export class CharacterDisplayComponent implements OnInit, AfterViewInit, OnDestr
   @ViewChild('canvas', { static: true }) canvasRef!: ElementRef<HTMLCanvasElement>;
 
   @Input() characterLevel: number = 20;
-  @Input() characterName: string = 'Digital Paladin';
+  @Input() characterName: string = 'Your Archetype';
   @Input() currentXP: number = 1850;
   @Input() maxXP: number = 2107;
   @Input() xpPercentage: number = 88;

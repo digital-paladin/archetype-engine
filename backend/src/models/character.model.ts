@@ -1,5 +1,5 @@
 /**
- * Core data models for Digital Paladin character system
+ * Core data models for Archetype Engine character system
  * Updated Dec 10, 2025 - Includes Title System, Grit Score, Git Gud Log
  */
 

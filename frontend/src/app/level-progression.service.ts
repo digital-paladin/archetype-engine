@@ -3,7 +3,7 @@ import { BehaviorSubject, Observable } from 'rxjs';
 
 /**
  * Level Progression Service
- * Implements Digital Paladin multi-class leveling system
+ * Implements Archetype Engine multi-class leveling system
  * Formula: XP_to_level = 100 × (level^1.5)
  * Based on character-sheet.md level progression formulas
  */

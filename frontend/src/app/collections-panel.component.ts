@@ -62,7 +62,7 @@ const ARMOR_PIECES: ArmorPiece[] = [
 ];
 
 const TITLES: TitleDef[] = [
-  { id: 'initiate', name: 'Paladin Initiate',      unlockStreak: 0,   rarity: 'common',    description: 'Began the Digital Paladin journey.' },
+  { id: 'initiate', name: 'Paladin Initiate',      unlockStreak: 0,   rarity: 'common',    description: 'Began the archetype journey.' },
   { id: 'seeker',   name: 'Steadfast Seeker',       unlockStreak: 90,  rarity: 'uncommon',  description: '90-day continuous streak achieved.' },
   { id: 'keeper',   name: 'Iron Will Keeper',        unlockStreak: 180, rarity: 'rare',      description: '180 days of unbroken discipline.' },
   { id: 'faithful', name: 'Faithful Dawn Warrior',  unlockStreak: 365, rarity: 'epic',      description: 'One full year of steadfast commitment.' },
