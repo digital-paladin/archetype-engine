@@ -296,7 +296,12 @@ Both scripts require `OWNER_EMAIL` set in `.env`.
 
 **Backend:** Designed for Railway. Set all `.env` variables as Railway environment variables. The filesystem is ephemeral — all persistent data must live in Supabase.
 
-**Frontend:** Designed for Vercel. Set `API_URL` as a build-time environment variable injected into `window.__ENV__` via `index.html`.
+**Frontend:** Designed for Vercel.
+
+- Runtime config: `frontend/public/env.js` sets `window.__ENV__.API_URL` (loaded from `index.html`).
+- Build: `scripts/write-frontend-env.mjs` regenerates `env.js` from the Vercel env var `API_URL` (falls back to the Railway production URL if unset).
+- `environment.prod.ts` also falls back to Railway — never to `localhost` — so a missing `__ENV__` cannot break login again.
+- Optional Vercel env: `API_URL=https://digital-paladin-gamification-system-production.up.railway.app`
 
 ---
 
