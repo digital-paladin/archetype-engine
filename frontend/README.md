@@ -44,6 +44,14 @@ To execute unit tests with the [Vitest](https://vitest.dev/) test runner, use th
 ng test
 ```
 
+For CI (single run, no watch):
+
+```bash
+npm run test:ci
+```
+
+Do **not** run `npx vitest` directly — Angular's `@angular/build:unit-test` builder supplies the TestBed environment and globals.
+
 ## Running end-to-end tests
 
 For end-to-end (e2e) testing, run:
