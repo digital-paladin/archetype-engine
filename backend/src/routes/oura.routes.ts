@@ -3,6 +3,7 @@ import { getDataService } from '../services/data/dataService';
 import { OuraService } from '../services/oura.service';
 import { authMiddleware } from '../middleware/auth.middleware';
 import { requireTier } from '../middleware/requireTier.middleware';
+import { syncSleepDebtFromJournalSafe } from '../services/sleepDebt.service';
 
 const router = Router();
 const ouraService = new OuraService();
@@ -118,6 +119,7 @@ router.get('/sleep/today', authMiddleware, requireTier('paladin'), async (req: R
         sleep_start: sleep.startTime,
         sleep_end: sleep.endTime,
       });
+      await syncSleepDebtFromJournalSafe(userId);
     }
     return res.json({ success: true, source: 'oura', provider: 'oura', sleep });
   } catch (err) {

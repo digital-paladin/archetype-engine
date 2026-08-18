@@ -71,7 +71,7 @@ This system occupies the gap: *you define the archetype, the system holds you ac
 
 ### Core System
 - **Skill trees with XP, leveling, and rust decay** — configurable class definitions, level thresholds, and XP formulas
-- **Sleep consolidation multiplier** — Fitbit sleep score → consolidation % → XP applied to character
+- **Sleep consolidation multiplier** — wearable sleep score → consolidation % → XP applied to character
 - **Action Consequence Matrix (ACM)** — 15 daily discipline checkboxes, weighted by resistance intensity
 - **Streak tracking** — per-discipline streak counters with compound break warnings
 - **XP projections** — analytics and forward-looking level projection graphs
@@ -86,7 +86,9 @@ This system occupies the gap: *you define the archetype, the system holds you ac
 - **Analytics** — XP history, class breakdown, consolidation trends
 
 ### Integrations (optional)
-- **Fitbit** — automatic sleep, nutrition, and vitality sync via OAuth 2.0
+- **Oura** — primary wearable (sleep + readiness)
+- **Google Health API** — Fitbit / Pixel Watch sleep (replaces Fitbit Web API, sunset Sep 2026)
+- **Fitbit Web API** — legacy fallback until re-consent
 - **Todoist** — AI agent task creation and management
 - **GitHub sync** — journal and character sheet backup via GitHub API
 
@@ -124,7 +126,7 @@ archetype-engine/
         ├── character-panel/    Skill trees, level display, XP bars
         ├── acm-panel/          Action Consequence Matrix
         ├── quests-panel/       Daily quest log
-        ├── sleep-panel/        Fitbit vitality + sleep debt
+        ├── sleep-panel/        Wearable vitality + sleep debt
         ├── analytics/          XP history, projection charts
         ├── inventory/          Consumables, crafting, vault
         ├── three-character/    Three.js GLB + animation service
@@ -263,7 +265,24 @@ The character panel uses a Mixamo GLB model with animation blending via Three.js
 
 ---
 
-## Fitbit Integration
+## Wearable Integration (sleep)
+
+Cascade: **Oura → Google Health (Fitbit / Pixel Watch) → legacy Fitbit Web API → journal cache**.
+
+### Google Health API (Fitbit / Pixel Watch)
+
+1. [Google Cloud Console](https://console.cloud.google.com) — enable **Google Health API**
+2. OAuth consent screen (Testing is fine for Owner-only)
+3. Create a **Web application** OAuth client. Redirect URIs:
+   - `http://localhost:3000/api/google-health/callback`
+   - `https://YOUR-RAILWAY-HOST/api/google-health/callback`
+4. Set on Railway / local `.env`: `GOOGLE_HEALTH_CLIENT_ID`, `GOOGLE_HEALTH_CLIENT_SECRET`, `GOOGLE_HEALTH_REDIRECT_URI`
+5. Apply `supabase/migrations/005_google_health_provider.sql`
+6. Sleep panel → **Fitbit / Pixel Watch (Google Health)** (must be signed in)
+
+`/api/google-health/callback` is intentionally unprotected — OAuth redirects cannot carry a JWT. Legacy Fitbit tokens do **not** transfer; you must re-consent with the Google account that owns the Fitbit data.
+
+### Legacy Fitbit Web API (sunset Sep 2026)
 
 1. Register at [dev.fitbit.com](https://dev.fitbit.com) — Personal App, OAuth 2.0
 2. Set `FITBIT_CLIENT_ID`, `FITBIT_CLIENT_SECRET`, `FITBIT_REDIRECT_URI=http://localhost:3000/api/fitbit/callback`

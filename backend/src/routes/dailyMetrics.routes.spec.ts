@@ -15,14 +15,22 @@ import request from 'supertest';
 import express, { Express } from 'express';
 
 // ── Mock getDataService BEFORE importing the route ───────────────────────────
-const mockGetJournalEntry   = jest.fn<Promise<any>, any[]>();
+const mockGetJournalEntry    = jest.fn<Promise<any>, any[]>();
 const mockUpsertJournalEntry = jest.fn<Promise<void>, any[]>();
+const mockListJournalSleepRange = jest.fn<Promise<any[]>, any[]>();
 
 jest.mock('../services/data/dataService', () => ({
   getDataService: () => ({
-    getJournalEntry:    (...args: any[]) => mockGetJournalEntry(...args),
-    upsertJournalEntry: (...args: any[]) => mockUpsertJournalEntry(...args),
+    getJournalEntry:         (...args: any[]) => mockGetJournalEntry(...args),
+    upsertJournalEntry:      (...args: any[]) => mockUpsertJournalEntry(...args),
+    listJournalSleepRange:   (...args: any[]) => mockListJournalSleepRange(...args),
+    getWearableTokens:       async () => null,
+    getFitbitTokens:         async () => null,
   }),
+}));
+
+jest.mock('../services/sleepDebt.service', () => ({
+  syncSleepDebtFromJournalSafe: jest.fn().mockResolvedValue(undefined),
 }));
 
 // ── Import AFTER mock ─────────────────────────────────────────────────────────
@@ -66,6 +74,7 @@ describe('GET /api/daily-metrics', () => {
   beforeEach(() => {
     mockGetJournalEntry.mockReset();
     mockUpsertJournalEntry.mockReset();
+    mockListJournalSleepRange.mockReset().mockResolvedValue([]);
   });
 
   it('returns null metrics when entry does not exist', async () => {
@@ -217,5 +226,37 @@ describe('POST /api/daily-metrics', () => {
 
     expect(res.status).toBe(500);
     expect(res.body.success).toBe(false);
+  });
+});
+
+describe('GET /api/daily-metrics/sleep-history', () => {
+  beforeEach(() => {
+    mockGetJournalEntry.mockReset();
+    mockUpsertJournalEntry.mockReset().mockResolvedValue(undefined);
+    mockListJournalSleepRange.mockReset().mockResolvedValue([]);
+  });
+
+  it('returns 30 calendar slots newest-first, not last-N journal rows', async () => {
+    const { calendarDaysNewestFirst, localDateStr } = await import('../services/sleepHistoryCalendar');
+    const end = localDateStr();
+    const expected = calendarDaysNewestFirst(end, 30);
+    const inWindow = expected[1];
+    mockListJournalSleepRange.mockResolvedValue([
+      { date: '2026-06-01', hours: 8, score: 90 },
+      { date: inWindow, hours: 5.5, score: 79 },
+    ]);
+
+    const res = await request(makeApp()).get('/api/daily-metrics/sleep-history');
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.history).toHaveLength(30);
+    expect(res.body.history.map((d: { date: string }) => d.date)).toEqual(expected);
+    expect(res.body.history[1]).toEqual({ date: inWindow, hours: 5.5, score: 79 });
+    expect(res.body.history.some((d: { date: string }) => d.date === '2026-06-01')).toBe(false);
+    expect(res.body.history.every((d: object) => Object.keys(d).sort().join() === 'date,hours,score')).toBe(true);
+    const [fromDate, toDate] = mockListJournalSleepRange.mock.calls[0].slice(1);
+    expect(fromDate).toBe(expected[29]);
+    expect(toDate).toBe(expected[0]);
   });
 });

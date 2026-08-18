@@ -9,6 +9,7 @@ import {
   CharacterProfile,
   QuestLineEntry, GrandConvergenceData,
 } from './IDataService';
+import { fitbitTokensFromRow, fitbitTokensUpsertRow } from './fitbitTokenRow';
 
 export class SupabaseDataService implements IDataService {
   private readonly db: SupabaseClient;
@@ -73,6 +74,26 @@ export class SupabaseDataService implements IDataService {
       .upsert({ ...entry, user_id: userId },
                { onConflict: 'user_id,entry_date' });
     if (error) throw error;
+  }
+
+  async listJournalSleepRange(
+    userId: string,
+    fromDate: string,
+    toDate: string,
+  ): Promise<Array<{ date: string; hours: number; score: number }>> {
+    const { data, error } = await this.db
+      .from('daily_journal_entries')
+      .select('entry_date, sleep_hours, fitbit_score')
+      .eq('user_id', userId)
+      .gte('entry_date', fromDate)
+      .lte('entry_date', toDate)
+      .order('entry_date', { ascending: false });
+    if (error) throw error;
+    return (data ?? []).map((r: { entry_date: string; sleep_hours: number | null; fitbit_score: number | null }) => ({
+      date:  String(r.entry_date).slice(0, 10),
+      hours: Number(r.sleep_hours) || 0,
+      score: Number(r.fitbit_score) || 0,
+    }));
   }
 
   // ── ACM ──────────────────────────────────────────────────────────────────
@@ -198,26 +219,18 @@ export class SupabaseDataService implements IDataService {
     if (error) throw error;
     if (!data) return null;
     // TODO Phase 2: decrypt tokens here (column-level encryption)
-    return {
-      access_token:   data.access_token_encrypted,
-      refresh_token:  data.refresh_token_encrypted,
-      expires_at:     Number(data.expires_at),
-      fitbit_user_id: data.fitbit_user_id ?? undefined,
-    };
+    return fitbitTokensFromRow(data);
   }
 
   async saveFitbitTokens(userId: string, tokens: FitbitTokens): Promise<void> {
+    if (!userId) {
+      throw new Error('Cannot save Fitbit tokens: missing userId (set OWNER_USER_ID)');
+    }
     // TODO Phase 2: encrypt tokens before storing
     const { error } = await this.db
       .from('fitbit_tokens')
-      .upsert({
-        user_id:                 userId,
-        access_token_encrypted:  tokens.access_token,
-        refresh_token_encrypted: tokens.refresh_token,
-        expires_at:              tokens.expires_at,
-        fitbit_user_id:          tokens.fitbit_user_id ?? null,
-      }, { onConflict: 'user_id' });
-    if (error) throw error;
+      .upsert(fitbitTokensUpsertRow(userId, tokens), { onConflict: 'user_id' });
+    if (error) throw new Error(error.message);
   }
 
   // ── Wearable tokens (multi-provider) ─────────────────────────────────────

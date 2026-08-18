@@ -3,21 +3,25 @@ import { getDataService } from '../services/data/dataService';
 import { OuraService } from '../services/oura.service';
 import { GarminService } from '../services/garmin.service';
 import { FitbitService } from '../services/fitbit.service';
+import { GoogleHealthService } from '../services/googleHealth.service';
 import { authMiddleware } from '../middleware/auth.middleware';
+import { syncSleepDebtFromJournalSafe } from '../services/sleepDebt.service';
 
 const router = Router();
 const oura = new OuraService();
 const garmin = new GarminService();
 const fitbit = new FitbitService();
+const googleHealth = new GoogleHealthService();
 
 /**
- * Aggregated wearable status + sleep cascade: Oura → Fitbit (Garmin stub skipped).
+ * Aggregated wearable status + sleep cascade: Oura → Google Health → Fitbit (Garmin stub skipped).
  * Mounted under /api/wearables AFTER global authMiddleware.
  */
 router.get('/status', authMiddleware, async (req: Request, res: Response) => {
   const userId = (req as any).userId as string;
-  const [ouraConnected, fitbitTokens] = await Promise.all([
+  const [ouraConnected, googleConnected, fitbitTokens] = await Promise.all([
     oura.hasTokens(userId),
+    googleHealth.hasTokens(userId),
     getDataService().getFitbitTokens(userId).catch(() => null),
   ]);
 
@@ -29,6 +33,12 @@ router.get('/status', authMiddleware, async (req: Request, res: Response) => {
         connected: ouraConnected,
         connectPath: '/api/oura/connect-url',
       },
+      google: {
+        configured: googleHealth.isConfigured(),
+        connected: googleConnected,
+        connectPath: '/api/google-health/connect-url',
+        label: 'Fitbit / Pixel Watch (Google Health)',
+      },
       garmin: {
         configured: garmin.isConfigured(),
         connected: false,
@@ -36,7 +46,7 @@ router.get('/status', authMiddleware, async (req: Request, res: Response) => {
       },
       fitbit: {
         configured: fitbit.isConfigured(),
-        connected: !!fitbitTokens?.access_token,
+        connected: !!fitbitTokens?.access_token && !googleConnected,
         connectPath: '/api/fitbit/auth',
         legacy: true,
       },
@@ -63,6 +73,7 @@ router.get('/sleep/today', authMiddleware, async (req: Request, res: Response) =
           sleep_start: sleep.startTime,
           sleep_end: sleep.endTime,
         });
+        await syncSleepDebtFromJournalSafe(userId);
       }
       return res.json({ success: true, provider: 'oura', source: 'oura', sleep });
     }
@@ -70,7 +81,28 @@ router.get('/sleep/today', authMiddleware, async (req: Request, res: Response) =
     console.warn(`[WEARABLES] Oura sleep failed, falling back: ${err instanceof Error ? err.message : err}`);
   }
 
-  // Legacy Fitbit fallback
+  // Google Health (Fitbit / Pixel Watch)
+  try {
+    if (googleHealth.isConfigured() && await googleHealth.hasTokens(userId)) {
+      const sleep = await googleHealth.getSleepData(dateStr, userId);
+      if (sleep.score > 0 || sleep.hours > 0) {
+        await getDataService().upsertJournalEntry(userId, {
+          user_id: userId,
+          entry_date: dateStr,
+          fitbit_score: sleep.score,
+          sleep_hours: sleep.hours,
+          sleep_start: sleep.startTime,
+          sleep_end: sleep.endTime,
+        });
+        await syncSleepDebtFromJournalSafe(userId);
+      }
+      return res.json({ success: true, provider: 'google', source: 'google-health', sleep });
+    }
+  } catch (err) {
+    console.warn(`[WEARABLES] Google Health sleep failed, falling back: ${err instanceof Error ? err.message : err}`);
+  }
+
+  // Legacy Fitbit Web API fallback
   try {
     if (fitbit.isConfigured()) {
       const sleep = await fitbit.getSleepData(dateStr, userId);
@@ -103,7 +135,7 @@ router.get('/sleep/today', authMiddleware, async (req: Request, res: Response) =
 
   return res.status(404).json({
     success: false,
-    error: 'No wearable sleep data. Connect Oura via /api/oura/connect-url.',
+    error: 'No wearable sleep data. Connect Oura or Google Health (Fitbit / Pixel Watch).',
   });
 });
 

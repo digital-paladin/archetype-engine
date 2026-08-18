@@ -1,5 +1,6 @@
 import { getDataService } from './data/dataService';
 import { FitbitTokens } from './data/IDataService';
+import { parseFitbitSleepDay, parseFitbitSleepRange } from './fitbitSleepParse';
 
 export interface SleepData {
   score: number;      // 0–100 composite score
@@ -150,6 +151,23 @@ export class FitbitService {
     if (res.status === 403) throw new Error(`Fitbit sleep API error: 403 (scope not authorized — re-authorize at /api/fitbit/auth)`);
     if (!res.ok) throw new Error(`Fitbit sleep API error: ${res.status}`);
     return this.parse(await res.json() as any);
+  }
+
+  /** Inclusive date range — one Fitbit call (max 100 days). */
+  async getSleepRange(startDate: string, endDate: string, userId: string): Promise<Array<{ date: string } & SleepData>> {
+    const tokens = await this.getValidTokens(userId);
+    const fetchRange = (accessToken: string) =>
+      fetch(`https://api.fitbit.com/1.2/user/-/sleep/date/${startDate}/${endDate}.json`, {
+        headers: { 'Authorization': `Bearer ${accessToken}` },
+      });
+    let res = await fetchRange(tokens.access_token);
+    if (res.status === 401) {
+      const refreshed = await this.doRefresh(tokens, userId);
+      res = await fetchRange(refreshed.access_token);
+    }
+    if (res.status === 403) throw new Error('Fitbit sleep API error: 403 (scope not authorized — re-authorize at /api/fitbit/auth)');
+    if (!res.ok) throw new Error(`Fitbit sleep range API error: ${res.status}`);
+    return parseFitbitSleepRange(await res.json());
   }
 
   async getActivities(date = 'today', userId: string): Promise<ActivitySummary> {
@@ -379,47 +397,13 @@ export class FitbitService {
   }
 
   private parse(data: any): SleepData {
-    const summary    = data.summary || {};
-    const stages     = summary.stages || {};
-    const totalMin   = summary.totalMinutesAsleep || 0;
-    const totalBed   = summary.totalTimeInBed    || totalMin || 1;
-    const efficiency = Math.min(Math.round((totalMin / totalBed) * 100), 100);
-    const hours      = Math.round((totalMin / 60) * 10) / 10;
-    // Vitality: 8-hr target × efficiency, capped at 10
-    const vitality   = Math.min(Math.round(((totalMin / 480) * (efficiency / 100)) * 100) / 10, 10);
-    // Composite score: hours 60% + efficiency 40%, mapped 0–100
-    const score      = Math.min(Math.round((totalMin / 480) * 60 + (efficiency / 100) * 40), 100);
-
+    const parsed = parseFitbitSleepDay(data);
     console.log(`[FITBIT] ── Sleep Parse Results ──────────────────`);
-    console.log(`[FITBIT]   Total sleep    : ${totalMin} min (${hours} hrs)`);
-    console.log(`[FITBIT]   Time in bed    : ${totalBed} min`);
-    console.log(`[FITBIT]   Efficiency     : ${efficiency}%`);
-    console.log(`[FITBIT]   Deep           : ${stages.deep  || 0} min`);
-    console.log(`[FITBIT]   REM            : ${stages.rem   || 0} min`);
-    console.log(`[FITBIT]   Light          : ${stages.light || 0} min`);
-    console.log(`[FITBIT]   Awake          : ${stages.wake  || 0} min`);
-    console.log(`[FITBIT]   Score (calc)   : ${score} / 100`);
-    console.log(`[FITBIT]   Vitality (calc): ${vitality} / 10`);
+    console.log(`[FITBIT]   Total sleep    : ${parsed.hours} hrs`);
+    console.log(`[FITBIT]   Efficiency     : ${parsed.efficiency}%`);
+    console.log(`[FITBIT]   Score (calc)   : ${parsed.score} / 100`);
     console.log(`[FITBIT] ─────────────────────────────────────────`);
-
-    // Extract bedtime / wake time from main sleep entry
-    const mainSleep = (data.sleep as any[] | undefined)
-      ?.find((s: any) => s.isMainSleep) ?? (data.sleep as any[])?.[0];
-    const toHHMM = (iso: string | undefined): string | undefined => {
-      if (!iso) return undefined;
-      const m = iso.match(/(\d{2}:\d{2})/);
-      return m ? m[1] : undefined;
-    };
-
-    return {
-      score, hours, vitality, efficiency,
-      deep_min:  stages.deep  || 0,
-      rem_min:   stages.rem   || 0,
-      light_min: stages.light || 0,
-      awake_min: stages.wake  || 0,
-      startTime: toHHMM(mainSleep?.startTime),
-      endTime:   toHHMM(mainSleep?.endTime),
-    };
+    return parsed;
   }
 
   private async doRefresh(tokens: FitbitTokens, userId: string): Promise<FitbitTokens> {
