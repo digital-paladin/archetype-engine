@@ -1,7 +1,100 @@
 import { Router, Request, Response } from 'express';
-import { getTodoistService, CreateTaskParams, CreateProjectParams } from '../services/todoist.service';
+import { TodoistService, CreateTaskParams, CreateProjectParams } from '../services/todoist.service';
+import {
+  assertConnectRateLimit,
+  deleteTodoistApiKey,
+  getTodoistConnectionStatus,
+  getTodoistServiceForUser,
+  saveTodoistApiKey,
+  validateApiKey,
+} from '../services/todoistToken.service';
 
 const router = Router();
+
+async function todoistFor(req: Request, res: Response): Promise<TodoistService | null> {
+  const userId = (req as any).userId as string | undefined;
+  if (!userId) {
+    res.status(401).json({ success: false, error: 'Unauthorized' });
+    return null;
+  }
+  const todoist = await getTodoistServiceForUser(userId);
+  if (!todoist) {
+    res.status(503).json({
+      success: false,
+      error: 'Todoist is not connected. Add an API key in Settings → Integrations.',
+    });
+    return null;
+  }
+  return todoist;
+}
+
+/**
+ * GET /api/todoist/connect
+ * Status only — never returns the raw API key.
+ */
+router.get('/connect', async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).userId as string | undefined;
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+    const status = await getTodoistConnectionStatus(userId);
+    return res.json({ success: true, ...status });
+  } catch (err: any) {
+    console.error('[TODOIST] GET /connect error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/todoist/connect
+ * Body: { apiKey: string }
+ */
+router.post('/connect', async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).userId as string | undefined;
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+    if (!assertConnectRateLimit(userId)) {
+      return res.status(429).json({ success: false, error: 'Too many connect attempts. Try again later.' });
+    }
+    const apiKey = validateApiKey(req.body?.apiKey);
+    if (!apiKey) {
+      return res.status(400).json({
+        success: false,
+        error: 'apiKey is required (20–128 characters)',
+      });
+    }
+    await saveTodoistApiKey(userId, apiKey);
+    return res.json({
+      success: true,
+      connected: true,
+      source: 'user',
+      masked: `****${apiKey.slice(-4)}`,
+    });
+  } catch (err: any) {
+    console.error('[TODOIST] POST /connect error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * DELETE /api/todoist/connect
+ */
+router.delete('/connect', async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).userId as string | undefined;
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+    await deleteTodoistApiKey(userId);
+    return res.json({ success: true, connected: false, source: null, masked: null });
+  } catch (err: any) {
+    console.error('[TODOIST] DELETE /connect error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 // ─── Tasks ────────────────────────────────────────────────────────────────────
 
@@ -17,7 +110,8 @@ const router = Router();
 router.get('/tasks', async (req: Request, res: Response) => {
   try {
     const { project_id, label, filter } = req.query as Record<string, string>;
-    const todoist = getTodoistService();
+    const todoist = await todoistFor(req, res);
+    if (!todoist) return;
     const tasks = await todoist.getTasks({ project_id, label, filter });
     res.json({ success: true, tasks });
   } catch (err: any) {
@@ -32,7 +126,8 @@ router.get('/tasks', async (req: Request, res: Response) => {
  */
 router.get('/tasks/:id', async (req: Request, res: Response) => {
   try {
-    const todoist = getTodoistService();
+    const todoist = await todoistFor(req, res);
+    if (!todoist) return;
     const task = await todoist.getTask(req.params.id);
     res.json({ success: true, task });
   } catch (err: any) {
@@ -54,7 +149,8 @@ router.post('/tasks', async (req: Request, res: Response) => {
     if (!params.content) {
       return res.status(400).json({ success: false, error: 'content is required' });
     }
-    const todoist = getTodoistService();
+    const todoist = await todoistFor(req, res);
+    if (!todoist) return;
     const task = await todoist.createTask(params);
     console.log(`[TODOIST] Created task: "${task.content}" (id=${task.id})`);
     res.status(201).json({ success: true, task });
@@ -83,7 +179,8 @@ router.post('/tasks/with-subtasks', async (req: Request, res: Response) => {
     if (!Array.isArray(subtasks) || subtasks.length === 0) {
       return res.status(400).json({ success: false, error: 'subtasks must be a non-empty array' });
     }
-    const todoist = getTodoistService();
+    const todoist = await todoistFor(req, res);
+    if (!todoist) return;
     const result = await todoist.createTaskWithSubtasks(task, subtasks);
     console.log(`[TODOIST] Created task+subtasks: "${result.parent.content}" with ${result.subtasks.length} subtask(s)`);
     res.status(201).json({ success: true, ...result });
@@ -100,7 +197,8 @@ router.post('/tasks/with-subtasks', async (req: Request, res: Response) => {
  */
 router.patch('/tasks/:id', async (req: Request, res: Response) => {
   try {
-    const todoist = getTodoistService();
+    const todoist = await todoistFor(req, res);
+    if (!todoist) return;
     const task = await todoist.updateTask(req.params.id, req.body);
     console.log(`[TODOIST] Updated task: "${task.content}" (id=${task.id})`);
     res.json({ success: true, task });
@@ -117,7 +215,8 @@ router.patch('/tasks/:id', async (req: Request, res: Response) => {
  */
 router.post('/tasks/:id/move', async (req: Request, res: Response) => {
   try {
-    const todoist = getTodoistService();
+    const todoist = await todoistFor(req, res);
+    if (!todoist) return;
     const task = await todoist.moveTask(req.params.id, req.body);
     console.log(`[TODOIST] Moved task id=${req.params.id}`);
     res.json({ success: true, task });
@@ -134,7 +233,8 @@ router.post('/tasks/:id/move', async (req: Request, res: Response) => {
  */
 router.post('/tasks/:id/close', async (req: Request, res: Response) => {
   try {
-    const todoist = getTodoistService();
+    const todoist = await todoistFor(req, res);
+    if (!todoist) return;
     await todoist.closeTask(req.params.id);
     console.log(`[TODOIST] Closed task id=${req.params.id}`);
     res.json({ success: true });
@@ -150,7 +250,8 @@ router.post('/tasks/:id/close', async (req: Request, res: Response) => {
  */
 router.post('/tasks/:id/reopen', async (req: Request, res: Response) => {
   try {
-    const todoist = getTodoistService();
+    const todoist = await todoistFor(req, res);
+    if (!todoist) return;
     await todoist.reopenTask(req.params.id);
     console.log(`[TODOIST] Reopened task id=${req.params.id}`);
     res.json({ success: true });
@@ -166,7 +267,8 @@ router.post('/tasks/:id/reopen', async (req: Request, res: Response) => {
  */
 router.delete('/tasks/:id', async (req: Request, res: Response) => {
   try {
-    const todoist = getTodoistService();
+    const todoist = await todoistFor(req, res);
+    if (!todoist) return;
     await todoist.deleteTask(req.params.id);
     console.log(`[TODOIST] Deleted task id=${req.params.id}`);
     res.json({ success: true });
@@ -184,8 +286,9 @@ router.delete('/tasks/:id', async (req: Request, res: Response) => {
  */
 router.get('/projects', async (req: Request, res: Response) => {
   try {
-    const todoist = getTodoistService();
-    const projects = await getTodoistService().getProjects();
+    const todoist = await todoistFor(req, res);
+    if (!todoist) return;
+    const projects = await todoist.getProjects();
     res.json({ success: true, projects });
   } catch (err: any) {
     console.error('[TODOIST] GET /projects error:', err.message);
@@ -205,7 +308,8 @@ router.post('/projects', async (req: Request, res: Response) => {
     if (!params.name) {
       return res.status(400).json({ success: false, error: 'name is required' });
     }
-    const todoist = getTodoistService();
+    const todoist = await todoistFor(req, res);
+    if (!todoist) return;
     const project = await todoist.createProject(params);
     console.log(`[TODOIST] Created project: "${project.name}" (id=${project.id})`);
     res.status(201).json({ success: true, project });
@@ -221,7 +325,8 @@ router.post('/projects', async (req: Request, res: Response) => {
  */
 router.delete('/projects/:id', async (req: Request, res: Response) => {
   try {
-    const todoist = getTodoistService();
+    const todoist = await todoistFor(req, res);
+    if (!todoist) return;
     await todoist.deleteProject(req.params.id);
     console.log(`[TODOIST] Deleted project id=${req.params.id}`);
     res.json({ success: true });
@@ -241,9 +346,10 @@ router.delete('/projects/:id', async (req: Request, res: Response) => {
  * Response:
  *   { success: true, current: TodoistTask | null, next: TodoistTask | null }
  */
-router.get('/quest-pointers', async (_req: Request, res: Response) => {
+router.get('/quest-pointers', async (req: Request, res: Response) => {
   try {
-    const todoist = getTodoistService();
+    const todoist = await todoistFor(req, res);
+    if (!todoist) return;
     const pointers = await todoist.getQuestPointers();
     res.json({ success: true, ...pointers });
   } catch (err: any) {
@@ -278,7 +384,8 @@ router.post('/quest-pointer', async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: 'taskId is required' });
     }
 
-    const todoist = getTodoistService();
+    const todoist = await todoistFor(req, res);
+    if (!todoist) return;
     const task = await todoist.setQuestPointer(slot, taskId);
     console.log(`[TODOIST] Quest pointer "${slot}" → task "${task.content}" (id=${task.id})`);
     res.json({ success: true, task });
@@ -301,7 +408,8 @@ router.delete('/quest-pointer/:slot', async (req: Request, res: Response) => {
     if (slot !== 'current' && slot !== 'next') {
       return res.status(400).json({ success: false, error: 'slot must be "current" or "next"' });
     }
-    const todoist = getTodoistService();
+    const todoist = await todoistFor(req, res);
+    if (!todoist) return;
     await todoist.clearQuestPointer(slot);
     console.log(`[TODOIST] Cleared quest pointer slot "${slot}"`);
     res.json({ success: true });
@@ -350,7 +458,8 @@ router.post('/scaffold', async (req: Request, res: Response) => {
     if (!Array.isArray(tasks) || tasks.length === 0) {
       return res.status(400).json({ success: false, error: 'tasks must be a non-empty array' });
     }
-    const todoist = getTodoistService();
+    const todoist = await todoistFor(req, res);
+    if (!todoist) return;
     const result = await todoist.scaffoldProject(projectName, tasks);
     console.log(
       `[TODOIST] Scaffolded project "${result.project.name}" with ${result.tasks.length} parent task(s)`

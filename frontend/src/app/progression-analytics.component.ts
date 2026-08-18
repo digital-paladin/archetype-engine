@@ -100,6 +100,8 @@ function classColor(name: string): string {
 
 // ── Component ───────────────────────────────────────────────────────────────
 
+export const ANALYTICS_EMPTY_MSG = 'No XP history in the database yet';
+
 @Component({
   selector: 'app-progression-analytics',
   standalone: true,
@@ -114,7 +116,7 @@ function classColor(name: string): string {
       <div *ngIf="!isLoading() && data() && !hasData()" class="pa-empty">
         <div class="pa-empty-icon">📊</div>
         <div class="pa-empty-title">No Analytics Data</div>
-        <div class="pa-empty-msg">The analytics parser couldn't read the character sheet on this environment. This will be resolved when Sprint 5 migrates parsing to Supabase.</div>
+        <div class="pa-empty-msg">{{ emptyMsg }}</div>
       </div>
 
       <ng-container *ngIf="!isLoading() && hasData()">
@@ -951,6 +953,7 @@ export class ProgressionAnalyticsComponent implements OnInit, OnDestroy {
   private readonly http          = inject(HttpClient);
   private readonly socketService = inject(SocketService);
   private socketSub?: Subscription;
+  readonly emptyMsg = ANALYTICS_EMPTY_MSG;
 
   isLoading    = signal(true);
   data         = signal<AnalyticsResponse | null>(null);
