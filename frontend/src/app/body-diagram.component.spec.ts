@@ -55,6 +55,7 @@ function buildMockService(active: BodyStatus[] = []) {
     updateStatus:           vi.fn(),
     markHealed:             vi.fn(),
     removeStatus:           vi.fn(),
+    syncFromJournal:        vi.fn(),
   };
 }
 

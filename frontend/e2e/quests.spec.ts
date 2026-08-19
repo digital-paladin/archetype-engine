@@ -14,7 +14,10 @@ import { test, expect } from '@playwright/test';
 test.describe('Quest Journal panel', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/dashboard');
-    await page.getByRole('button', { name: /quests/i }).click();
+    // Exact "Quests" label — /quests/i also matches "Quests (Todoist)"
+    await page.locator('.eso-tab-bar .eso-tab').filter({
+      has: page.locator('.eso-tab-label', { hasText: /^Quests$/ }),
+    }).click();
     // Wait for the quest journal shell to appear
     await expect(page.locator('.qj-shell')).toBeVisible({ timeout: 20_000 });
     // Wait for data to load — Railway can be slow; give up to 45 s for the quests API

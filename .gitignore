@@ -1,6 +1,6 @@
 # Dependencies
 node_modules/
-package-lock.json
+# Track npm lockfiles (Railway + CI). Ignoring them made `railway up` omit package-lock.json.
 yarn.lock
 
 # Environment variables
