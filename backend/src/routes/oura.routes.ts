@@ -93,15 +93,18 @@ router.get('/sleep/today', authMiddleware, requireTier('paladin'), async (req: R
   try {
     const db = getDataService();
     const entry = await db.getJournalEntry(userId, dateStr);
-    if (entry?.fitbit_score && entry.fitbit_score > 0) {
+    // Cache on sleep_hours, not fitbit_score — a manual edit (e.g. adding nap
+    // time the wearable didn't capture) only sets sleep_hours, and must not
+    // get silently overwritten by a later same-day auto-sync call.
+    if (entry?.sleep_hours && entry.sleep_hours > 0) {
       return res.json({
         success: true,
         source: 'cache',
         provider: 'oura',
         sleep: {
-          score: entry.fitbit_score,
+          score: entry.fitbit_score ?? 0,
           hours: entry.sleep_hours ?? 0,
-          vitality: entry.fitbit_score / 10,
+          vitality: (entry.fitbit_score ?? 0) / 10,
           startTime: entry.sleep_start ?? undefined,
           endTime: entry.sleep_end ?? undefined,
           deep_min: 0, rem_min: 0, light_min: 0, awake_min: 0, efficiency: 0,

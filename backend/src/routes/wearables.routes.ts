@@ -60,6 +60,32 @@ router.get('/sleep/today', authMiddleware, async (req: Request, res: Response) =
     ? req.query.date
     : new Date().toLocaleDateString('en-CA');
 
+  // Cache first, gated on sleep_hours (not fitbit_score) — this endpoint is
+  // called on every dashboard load, so without this check a manual edit that
+  // adds nap time the wearable didn't capture gets silently overwritten by
+  // the very next reload's Oura/Google Health/Fitbit fetch.
+  try {
+    const cachedEntry = await getDataService().getJournalEntry(userId, dateStr);
+    if (cachedEntry?.sleep_hours && cachedEntry.sleep_hours > 0) {
+      return res.json({
+        success: true,
+        provider: 'cache',
+        source: 'cache',
+        sleep: {
+          score: cachedEntry.fitbit_score ?? 0,
+          hours: cachedEntry.sleep_hours,
+          vitality: (cachedEntry.fitbit_score ?? 0) / 10,
+          efficiency: 0,
+          deep_min: 0, rem_min: 0, light_min: 0, awake_min: 0,
+          startTime: cachedEntry.sleep_start ?? undefined,
+          endTime: cachedEntry.sleep_end ?? undefined,
+        },
+      });
+    }
+  } catch (err) {
+    console.warn(`[WEARABLES] Cache read failed (non-fatal): ${err instanceof Error ? err.message : err}`);
+  }
+
   // Prefer Oura when connected
   try {
     if (oura.isConfigured() && await oura.hasTokens(userId)) {
@@ -112,18 +138,19 @@ router.get('/sleep/today', authMiddleware, async (req: Request, res: Response) =
     console.warn(`[WEARABLES] Fitbit sleep failed: ${err instanceof Error ? err.message : err}`);
   }
 
-  // Journal cache last resort
+  // Journal cache last resort (only reached if the upfront cache read above
+  // errored and every live provider also failed/wasn't connected)
   try {
     const entry = await getDataService().getJournalEntry(userId, dateStr);
-    if (entry?.fitbit_score && entry.fitbit_score > 0) {
+    if (entry?.sleep_hours && entry.sleep_hours > 0) {
       return res.json({
         success: true,
         provider: 'cache',
         source: 'cache',
         sleep: {
-          score: entry.fitbit_score,
+          score: entry.fitbit_score ?? 0,
           hours: entry.sleep_hours ?? 0,
-          vitality: entry.fitbit_score / 10,
+          vitality: (entry.fitbit_score ?? 0) / 10,
           efficiency: 0,
           deep_min: 0, rem_min: 0, light_min: 0, awake_min: 0,
           startTime: entry.sleep_start ?? undefined,

@@ -79,17 +79,20 @@ router.get('/sleep/today', authMiddleware, async (req: Request, res: Response) =
   const clientDate = typeof req.query.date === 'string' ? req.query.date : undefined;
   const userId = (req as any).userId as string;
 
-  // Check DB cache first — only hit Fitbit API if fitbit_score is still 0
+  // Check DB cache first — only hit Fitbit API if sleep_hours isn't logged yet.
+  // Gate on sleep_hours (not fitbit_score): a manual edit that adds nap time
+  // the wearable didn't capture only sets sleep_hours, and must survive a
+  // later same-day auto-sync call rather than being silently overwritten.
   try {
     console.log('[FITBIT] Checking DB cache for today\'s sleep data...');
     const db         = getDataService();
     const dateStr    = clientDate ?? new Date().toLocaleDateString('en-CA');
     const entry      = await db.getJournalEntry(userId, dateStr);
-    if (entry?.fitbit_score && entry.fitbit_score > 0) {
+    if (entry?.sleep_hours && entry.sleep_hours > 0) {
       const cached = {
-        score:       entry.fitbit_score,
+        score:       entry.fitbit_score ?? 0,
         hours:       entry.sleep_hours ?? 0,
-        vitality:    entry.fitbit_score / 10,
+        vitality:    (entry.fitbit_score ?? 0) / 10,
         startTime:   entry.sleep_start ?? undefined,
         endTime:     entry.sleep_end   ?? undefined,
         deep_min: 0, rem_min: 0, light_min: 0, awake_min: 0, efficiency: 0,
@@ -101,7 +104,7 @@ router.get('/sleep/today', authMiddleware, async (req: Request, res: Response) =
       console.log('[FITBIT] ═════════════════════════════════════════\n');
       return res.json({ success: true, sleep: cached, source: 'cache' });
     }
-    console.log('[FITBIT] Cache MISS (score=0 or not found) — will fetch from Fitbit API');
+    console.log('[FITBIT] Cache MISS (no sleep_hours logged) — will fetch from Fitbit API');
   } catch (err) {
     console.warn(`[FITBIT] DB cache read failed (non-fatal): ${err instanceof Error ? err.message : err}`);
   }
