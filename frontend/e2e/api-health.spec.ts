@@ -130,8 +130,9 @@ test.describe('Railway API health (Supabase-backed)', () => {
     });
     expect(res.status()).toBe(200);
     const body = await res.json();
-    expect(body, 'Must include vitalityScore').toHaveProperty('vitalityScore');
-    expect(typeof body.vitalityScore).toBe('number');
+    // API field is `current` (VitalityStatus in xp-projection.service.ts), not vitalityScore
+    expect(body, 'Must include current vitality').toHaveProperty('current');
+    expect(typeof body.current).toBe('number');
   });
 
   // ── /api/activities/types ────────────────────────────────────────────────────
