@@ -7,6 +7,7 @@ import { getDataService } from '../services/data/dataService';
 import { getSupabaseAdmin } from '../lib/supabase';
 import { calculateOverallLevelInfo } from '../utils/overallLevel';
 import { getUserBirthDate } from '../services/onboarding.service';
+import { buildAnalyticsFromDb } from '../services/analyticsFromDb';
 
 const router = Router();
 
@@ -257,8 +258,8 @@ router.post('/xp-update', async (req: Request, res: Response) => {
 
 /**
  * GET /api/character/analytics
- * DB-first: aggregates xp_history → recentEntries + projections + timeToLevel.
- * Falls back to file-based parsing when userId absent or DB empty.
+ * DB-first for authenticated users (character_stats + xp_history).
+ * File fallback only when userId is absent.
  */
 router.get('/analytics', async (req: Request, res: Response) => {
   try {
@@ -267,90 +268,21 @@ router.get('/analytics', async (req: Request, res: Response) => {
     const userId     = (req as any).userId as string;
 
     if (userId) {
-      try {
-        const db      = getDataService();
-        const history = await db.getXPHistory(userId).catch(() => []);
-        const stats   = await db.getCharacterStats(userId).catch(() => []);
-
-        if (history.length > 0) {
-          // ── Build recentEntries from xp_history ──────────────────────────────
-          const dayMap = new Map<string, Record<string, number>>();
-          for (const entry of history) {
-            const day = entry.earned_at.slice(0, 10);
-            if (!dayMap.has(day)) dayMap.set(day, {});
-            const cm = dayMap.get(day)!;
-            cm[entry.class_name] = (cm[entry.class_name] ?? 0) + entry.xp_confirmed;
-          }
-          const recentEntries = Array.from(dayMap.entries())
-            .sort(([a], [b]) => b.localeCompare(a))
-            .slice(0, maxEntries)
-            .map(([dateStr, classXP]) => {
-              const d = new Date(dateStr + 'T12:00:00Z');
-              const dateLabel = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-              const totalXP   = Object.values(classXP).reduce((a, b) => a + b, 0);
-              return { dateLabel, classXP, totalXP };
-            });
-
-          // ── Build projections from xp_history ────────────────────────────────
-          const classMap: Record<string, { totalXP: number; days: Set<string> }> = {};
-          for (const entry of history) {
-            const cls = entry.class_name;
-            const day = entry.earned_at.slice(0, 10);
-            if (!classMap[cls]) classMap[cls] = { totalXP: 0, days: new Set() };
-            classMap[cls].totalXP += entry.xp_confirmed;
-            classMap[cls].days.add(day);
-          }
-          const projections: Record<string, any> = {};
-          for (const [cls, data] of Object.entries(classMap)) {
-            const daysTracked = Math.max(1, data.days.size);
-            const avg = data.totalXP / daysTracked;
-            projections[cls] = {
-              totalXP:      data.totalXP,
-              daysTracked,
-              avgDailyXP:   Number(avg.toFixed(2)),
-              avgWeeklyXP:  Number((avg * 7).toFixed(2)),
-              projected6mo: Math.round(avg * 182.5),
-              projected12mo: Math.round(avg * 365),
-            };
-          }
-
-          // ── Build timeToLevel from character_stats + projections ──────────────
-          const timeToLevel = stats.map(stat => {
-            const avg      = projections[stat.class_name]?.avgDailyXP ?? 0;
-            const xpNeeded = Math.max(0, xpThresholdForLevel(stat.level) - stat.current_xp);
-            const days     = avg > 0 ? Math.ceil(xpNeeded / avg) : 9999;
-            const projDate = new Date();
-            projDate.setDate(projDate.getDate() + days);
-            return {
-              className:     stat.class_name,
-              level:         stat.level,
-              currentXP:     stat.current_xp,
-              xpNeeded,
-              avgDailyXP:    Number(avg.toFixed(2)),
-              daysRemaining: days,
-              projectedDate: days < 9999
-                ? projDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
-                : 'N/A',
-              isInactive:    avg === 0,
-            };
-          });
-
-          const systemAlerts = parseSystemAlerts(recentEntries);
-          console.log(`[ANALYTICS] DB — ${recentEntries.length} entries, ${timeToLevel.length} classes`);
-          return res.json({
-            recentEntries,
-            timeToLevel,
-            projections,
-            disciplineSummary: {},  // acl_items not yet seeded
-            systemAlerts,
-          });
-        }
-      } catch (dbErr) {
-        console.warn('[ANALYTICS] DB error, falling back to file:', dbErr instanceof Error ? dbErr.message : dbErr);
-      }
+      const db      = getDataService();
+      const history = await db.getXPHistory(userId, maxEntries).catch(() => []);
+      const stats   = await db.getCharacterStats(userId).catch(() => []);
+      const built   = buildAnalyticsFromDb(history, stats, maxEntries);
+      console.log(`[ANALYTICS] DB — ${built.recentEntries.length} entries, ${built.timeToLevel.length} classes`);
+      return res.json({
+        recentEntries: built.recentEntries,
+        timeToLevel:   built.timeToLevel,
+        projections:   built.projections,
+        disciplineSummary: {},
+        systemAlerts:  built.systemAlerts,
+      });
     }
 
-    // ── File fallback ────────────────────────────────────────────────────────
+    // ── File fallback (unauthenticated / local sheet) ──────────────────────
     const filePath = process.env.CHARACTER_FILE_PATH || '../character-sheet.md';
     console.log(`[ANALYTICS] File fallback: ${filePath}`);
     const content          = ArchiveReaderService.getFullCharacterHistory(filePath);

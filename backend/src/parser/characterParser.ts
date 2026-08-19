@@ -252,14 +252,14 @@ export class CharacterParser {
 
   private parseRpgLift(sectionText: string, liftName: string): RpgLift {
     const escaped = liftName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const match = sectionText.match(new RegExp(`\\*\\*${escaped}:\\*\\* (.+?)(?:\\n|$)`));
+    const match = sectionText.match(new RegExp(`\\*\\*${escaped}:\\*\\*\\s*([^\\n]+)`));
     if (!match) return { value: '[TBD]' };
     const raw = match[1].trim();
     if (raw.startsWith('[TBD]')) return { value: '[TBD]' };
-    const numMatch = raw.match(/^([\d.]+) lbs?/);
-    const targetMatch = raw.match(/target ([^)]+)/);
+    const numMatch = raw.match(/^([\d.]+)\s*lbs?/i);
+    const targetMatch = raw.match(/target\s+([^)|*]+)/i);
     return {
-      value: raw.split(' (')[0].trim(),
+      value: raw.replace(/\s*\*.*$/, '').trim() || raw.split(' (')[0].trim(),
       numericValue: numMatch ? parseFloat(numMatch[1]) : undefined,
       target: targetMatch ? targetMatch[1].trim() : undefined
     };

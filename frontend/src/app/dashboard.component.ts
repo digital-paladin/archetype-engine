@@ -42,8 +42,9 @@ import { InventoryComponent } from './inventory.component';
 import { CraftingStationComponent } from './crafting-station.component';
 import { TodoistPanelComponent } from './todoist-panel.component';
 import { BillingPanelComponent } from './billing-panel.component';
+import { IntegrationsPanelComponent } from './integrations-panel.component';
 
-type PanelId = 'character' | 'skills' | 'health' | 'xp' | 'consumables' | 'sleep' | 'acm' | 'nutrition' | 'quests' | 'quest-lines' | 'analytics' | 'buffs' | 'vault' | 'courage' | 'rewards' | 'treasury' | 'inventory' | 'crafting' | 'todoist' | 'billing';
+type PanelId = 'character' | 'skills' | 'health' | 'xp' | 'consumables' | 'sleep' | 'acm' | 'nutrition' | 'quests' | 'quest-lines' | 'analytics' | 'buffs' | 'vault' | 'courage' | 'rewards' | 'treasury' | 'inventory' | 'crafting' | 'todoist' | 'billing' | 'integrations';
 
 const NAV_TABS: { id: PanelId; icon: string; label: string }[] = [
   { id: 'character',   icon: '⚔',  label: 'Character'   },
@@ -60,6 +61,7 @@ const NAV_TABS: { id: PanelId; icon: string; label: string }[] = [
   { id: 'rewards',      icon: '🎁',  label: 'Rewards'  },
   { id: 'treasury',     icon: '🏦', label: 'Treasury'  },
   { id: 'billing',      icon: '💳', label: 'Billing'   },
+  { id: 'integrations', icon: '🔌', label: 'Integrations' },
   { id: 'quest-lines',  icon: '🗺️', label: 'Quest Lines' },
   { id: 'inventory',    icon: '🛡',  label: 'Inventory'   },
   { id: 'crafting',     icon: '⚒',  label: 'Crafting'    },
@@ -69,7 +71,7 @@ const NAV_TABS: { id: PanelId; icon: string; label: string }[] = [
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [CommonModule, QuickLogComponent, CharacterDisplayComponent, BodyDiagramComponent, XpCalculatorComponent, ConsumablesComponent, AbilityHotbarComponent, ActivitySessionPanelComponent, SleepPanelComponent, FoodLogPanelComponent, ActivityFeedComponent, AcmPanelComponent, QuestsPanelComponent, SkillsPanelComponent, LootDropOverlayComponent, CharacterStatsPanelComponent, ProgressionAnalyticsComponent, CollectionsPanelComponent, StatusEffectsPanelComponent, VaultPanelComponent, CouragePanelComponent, RewardsCatalogPanelComponent, TreasuryPanelComponent, QuestLinesPanelComponent, InventoryComponent, CraftingStationComponent, TodoistPanelComponent, BillingPanelComponent],
+  imports: [CommonModule, QuickLogComponent, CharacterDisplayComponent, BodyDiagramComponent, XpCalculatorComponent, ConsumablesComponent, AbilityHotbarComponent, ActivitySessionPanelComponent, SleepPanelComponent, FoodLogPanelComponent, ActivityFeedComponent, AcmPanelComponent, QuestsPanelComponent, SkillsPanelComponent, LootDropOverlayComponent, CharacterStatsPanelComponent, ProgressionAnalyticsComponent, CollectionsPanelComponent, StatusEffectsPanelComponent, VaultPanelComponent, CouragePanelComponent, RewardsCatalogPanelComponent, TreasuryPanelComponent, QuestLinesPanelComponent, InventoryComponent, CraftingStationComponent, TodoistPanelComponent, BillingPanelComponent, IntegrationsPanelComponent],
   template: `
     <div class="eso-game-frame">
 
@@ -413,6 +415,10 @@ const NAV_TABS: { id: PanelId; icon: string; label: string }[] = [
           <!-- ── Billing Panel ── -->
           <ng-container *ngIf="activePanel() === 'billing'">
             <app-billing-panel></app-billing-panel>
+          </ng-container>
+
+          <ng-container *ngIf="activePanel() === 'integrations'">
+            <app-integrations-panel></app-integrations-panel>
           </ng-container>
 
           <!-- ── Quest Lines Panel ── -->
