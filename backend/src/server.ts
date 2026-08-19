@@ -16,6 +16,7 @@ import consumeRouter, { setConsumeSocketIO } from './routes/consume.routes';
 import foodEstimateRouter from './routes/foodEstimate.routes';
 import fitbitRouter from './routes/fitbit.routes';
 import ouraRouter from './routes/oura.routes';
+import googleHealthRouter from './routes/googleHealth.routes';
 import wearablesRouter from './routes/wearables.routes';
 import billingRouter from './routes/billing.routes';
 import stripeWebhookRouter from './routes/stripeWebhook.routes';
@@ -36,8 +37,12 @@ import { authMiddleware } from './middleware/auth.middleware';
 import { requireTier } from './middleware/requireTier.middleware';
 import { FitbitService } from './services/fitbit.service';
 import { OuraService } from './services/oura.service';
+import { GoogleHealthService } from './services/googleHealth.service';
 import { getDataService } from './services/data/dataService';
 import { runDailyIncrement } from './services/abstinence.service';
+import { syncSleepDebtFromJournalSafe } from './services/sleepDebt.service';
+import { ConsolidationService } from './services/consolidation.service';
+import { CONSOLIDATION_CRON_EXPR } from './services/consolidationSchedule';
 import { schedule as cronSchedule } from 'node-cron';
 
 // Load environment variables
@@ -89,10 +94,11 @@ app.get('/health', (req, res) => {
 // Auth routes (no auth required for login)
 app.use('/api/auth', authRouter);
 
-// Fitbit + Oura OAuth — registered BEFORE global authMiddleware so /callback is reachable.
+// Fitbit + Oura + Google Health OAuth — registered BEFORE global authMiddleware so /callback is reachable.
 // Protected sub-routes apply authMiddleware internally.
 app.use('/api/fitbit', fitbitRouter);
 app.use('/api/oura', ouraRouter);
+app.use('/api/google-health', googleHealthRouter);
 
 // Apply authentication middleware to all other API routes
 app.use('/api', authMiddleware);
@@ -204,8 +210,9 @@ httpServer.listen(PORT_NUMBER, '0.0.0.0', () => {
 });
 
 {
-  // Daily wearable sleep sync — 11:50pm CST (Oura preferred, Fitbit fallback)
+  // Daily wearable sleep sync — 11:50pm CST (Oura → Google Health → Fitbit)
   const ouraCron = new OuraService();
+  const googleHealthCron = new GoogleHealthService();
   const fitbitCronService = new FitbitService();
 
   cronSchedule('50 23 * * *', async () => {
@@ -236,6 +243,11 @@ httpServer.listen(PORT_NUMBER, '0.0.0.0', () => {
         score = sleep.score;
         hours = sleep.hours;
         provider = 'oura';
+      } else if (googleHealthCron.isConfigured() && await googleHealthCron.hasTokens(ownerUserId)) {
+        const sleep = await googleHealthCron.getSleepData('today', ownerUserId);
+        score = sleep.score;
+        hours = sleep.hours;
+        provider = 'google';
       } else if (fitbitCronService.isConfigured()) {
         const sleep = await fitbitCronService.getSleepData('today', ownerUserId);
         score = sleep.score;
@@ -254,13 +266,14 @@ httpServer.listen(PORT_NUMBER, '0.0.0.0', () => {
         sleep_hours: hours,
       });
       console.log('[CRON] ✅ Supabase journal_entries updated with sleep data');
+      await syncSleepDebtFromJournalSafe(ownerUserId);
     } catch (err) {
       console.error(`[CRON] ❌ Daily sync failed: ${err instanceof Error ? err.message : err}`);
     }
     console.log('[CRON] ═══════════════════════════════════════════\n');
   }, { timezone: 'America/Chicago' });
 
-  console.log('[CRON] 📅 Daily wearable sleep sync scheduled at 11:50pm CST (Oura → Fitbit)');
+  console.log('[CRON] 📅 Daily wearable sleep sync scheduled at 11:50pm CST (Oura → Google Health → Fitbit)');
 }
 
 {
@@ -282,6 +295,26 @@ httpServer.listen(PORT_NUMBER, '0.0.0.0', () => {
   }, { timezone: 'America/Chicago' });
 
   console.log('[CRON] 📅 Abstinence streak increment scheduled at 12:05am CST');
+}
+
+{
+  // End-of-day XP + sleep consolidation — 00:05 UTC (previous UTC calendar date)
+  cronSchedule(CONSOLIDATION_CRON_EXPR, async () => {
+    console.log('\n[CRON] ═══ Daily UTC consolidation ═══');
+    console.log(`[CRON] Time: ${new Date().toISOString()}`);
+    try {
+      const result = await new ConsolidationService().runDailyUtc();
+      console.log(
+        `[CRON] ✅ consolidation date=${result.date} users=${result.users} ` +
+        `ok=${result.ok} skippedXp=${result.skippedXp} failed=${result.failed}`,
+      );
+    } catch (err) {
+      console.error(`[CRON] ❌ Consolidation failed: ${err instanceof Error ? err.message : err}`);
+    }
+    console.log('[CRON] ═══════════════════════════════════════════\n');
+  }, { timezone: 'UTC' });
+
+  console.log('[CRON] 📅 Daily consolidation scheduled at 00:05 UTC (previous UTC date)');
 }
 
 // Graceful shutdown

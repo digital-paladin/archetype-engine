@@ -7,6 +7,7 @@ import * as path from 'path';
 import { XPProjectionService, XPProjection } from '../services/xpProjection.service';
 import { getSupabaseAdmin } from '../lib/supabase';
 import { getDataService } from '../services/data/dataService';
+import { syncSleepDebtFromJournalSafe } from '../services/sleepDebt.service';
 
 const router = Router();
 
@@ -16,9 +17,10 @@ export const CHARACTER_SHEET_PATH = process.env.CHARACTER_FILE_PATH || path.reso
 // Endpoint: /api/vitality-status - returns current vitality, status, sleep debt, trend, and flag
 router.get('/vitality-status', async (req: Request, res: Response) => {
   try {
-    // DB-first: character_profile (populated by POST /api/consolidation/run)
+    // DB-first: character_profile (sleep debt catch-up from journal nights)
     const userId = (req as any).userId as string | undefined;
     if (userId) {
+      await syncSleepDebtFromJournalSafe(userId);
       const db = getDataService();
       const profile = await db.getCharacterProfile(userId).catch(() => null);
       if (profile?.sleep_debt !== undefined) {

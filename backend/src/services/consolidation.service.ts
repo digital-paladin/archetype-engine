@@ -13,6 +13,13 @@
 import { getDataService } from './data/dataService';
 import { getSupabaseAdmin } from '../lib/supabase';
 import { XpCalculatorService } from './xpCalculator.service';
+import { syncSleepDebtFromJournal } from './sleepDebt.service';
+import {
+  consolidationUserIds,
+  DEFAULT_CONSOLIDATION_STREAK_DAYS,
+  previousUtcDate,
+  xpHistoryCoversDate,
+} from './consolidationSchedule';
 
 export interface ConsolidationClassResult {
   className:   string;
@@ -33,6 +40,7 @@ export interface ConsolidationResult {
   classes:           ConsolidationClassResult[];
   totalPending:      number;
   totalConfirmed:    number;
+  skippedXp:         boolean;
 }
 
 export class ConsolidationService {
@@ -85,10 +93,25 @@ export class ConsolidationService {
       this.calc.getFitbitModifier(fitbitScore) * 100
     );
 
-    // 5. Load current character_stats to apply bonus XP correctly
-    const allStats = await db.getCharacterStats(userId);
+    const { data: existingHist, error: histErr } = await supabase
+      .from('xp_history')
+      .select('earned_at')
+      .eq('user_id', userId)
+      .eq('earned_at', date)
+      .limit(1);
+    if (histErr) throw new Error(`xp_history lookup: ${histErr.message}`);
+    const skippedXp = xpHistoryCoversDate(
+      (existingHist ?? []).map(r => String(r.earned_at)),
+      date,
+    );
 
     const classResults: ConsolidationClassResult[] = [];
+
+    if (skippedXp) {
+      console.log(`[CONSOLIDATION] ${date} already in xp_history — skip bonus XP`);
+    } else {
+    // 5. Load current character_stats to apply bonus XP correctly
+    const allStats = await db.getCharacterStats(userId);
 
     for (const [className, pendingXP] of Object.entries(pendingMap)) {
       const { bonusXP } = this.calc.calculateConfirmedXP(pendingXP, streakDays, fitbitScore);
@@ -153,34 +176,15 @@ export class ConsolidationService {
         r.newLevel     = newLevel;
       }
     }
+    } // end skip-XP else
 
-    // 8. Compute sleep_debt / vitality and persist to character_profile
-    const prevProfile    = await db.getCharacterProfile(userId);
-    const sleepHours     = journalEntry?.sleep_hours ?? 7.5;
-    const fitbitQuality  = (fitbitScore ?? 90) / 100;
-    let sleepDebt        = prevProfile?.sleep_debt ?? 0;
-    if (sleepHours < 7.5) {
-      sleepDebt += (7.5 - sleepHours);
-    } else {
-      const surplus  = sleepHours - 7.5;
-      const tierMax  = sleepDebt > 10 ? 1.0 : sleepDebt > 5 ? 0.75 : 0.5;
-      sleepDebt = Math.max(0, sleepDebt - Math.min(surplus * 0.5 * fitbitQuality, tierMax));
-    }
-    sleepDebt = Math.round(sleepDebt * 100) / 100;
-    const vitality       = sleepDebt > 5
-      ? Math.round(Math.max(0, 100 - (sleepDebt - 5) * 3) * 10) / 10
-      : 100;
-    const prevSleepDebt  = prevProfile?.sleep_debt ?? sleepDebt;
-    const sleepTrend     = sleepDebt > prevSleepDebt + 0.05 ? 'Increased'
-      : sleepDebt < prevSleepDebt - 0.05 ? 'Decreased' : 'Stable';
-
-    await db.upsertCharacterProfile(userId, {
-      vitality,
-      sleep_debt:  sleepDebt,
-      sleep_trend: sleepTrend,
-      sage_streak: streakDays,
-    });
-    console.log(`[CONSOLIDATION] character_profile updated — vitality: ${vitality}, sleepDebt: ${sleepDebt}, trend: ${sleepTrend}`);
+    // 8. Sleep debt: 14-day rolling deficit sum from journal nights. Do not default missing hours to 7.5.
+    const debtSync = await syncSleepDebtFromJournal(userId, db);
+    await db.upsertCharacterProfile(userId, { sage_streak: streakDays });
+    console.log(
+      `[CONSOLIDATION] character_profile updated — vitality: ${debtSync?.vitality ?? 'n/a'}, ` +
+      `sleepDebt: ${debtSync?.sleepDebt ?? 'n/a'}, trend: ${debtSync?.sleepTrend ?? 'n/a'}`,
+    );
 
     return {
       date,
@@ -188,10 +192,71 @@ export class ConsolidationService {
       streakTier:       tierName,
       fitbitScore,
       consolidationPct,
-      aclBonus,
+      aclBonus:         skippedXp ? 0 : aclBonus,
       classes:          classResults,
       totalPending:     classResults.reduce((s, r) => s + r.pendingXP,   0),
       totalConfirmed:   classResults.reduce((s, r) => s + r.confirmedXP, 0),
+      skippedXp,
     };
+  }
+
+  /**
+   * Nightly job: consolidate the UTC date that just ended for every player
+   * (character_profile ∪ character_stats ∪ OWNER, minus DEMO).
+   */
+  async runDailyUtc(now = new Date()): Promise<{
+    date: string;
+    users: number;
+    ok: number;
+    skippedXp: number;
+    failed: number;
+  }> {
+    const date = previousUtcDate(now);
+    const supabase = getSupabaseAdmin();
+    const db = getDataService();
+
+    const [{ data: profiles, error: pErr }, { data: stats, error: sErr }] = await Promise.all([
+      supabase.from('character_profile').select('user_id'),
+      supabase.from('character_stats').select('user_id'),
+    ]);
+    if (pErr) throw new Error(`character_profile list: ${pErr.message}`);
+    if (sErr) throw new Error(`character_stats list: ${sErr.message}`);
+
+    const userIds = consolidationUserIds(
+      (profiles ?? []).map(r => r.user_id as string),
+      (stats ?? []).map(r => r.user_id as string),
+      {
+        ownerUserId: process.env.OWNER_USER_ID?.trim(),
+        demoUserId: process.env.DEMO_USER_ID?.trim(),
+      },
+    );
+
+    let ok = 0;
+    let skippedXp = 0;
+    let failed = 0;
+    for (const userId of userIds) {
+      try {
+        const profile = await db.getCharacterProfile(userId).catch(() => null);
+        const streakDays = Number(profile?.sage_streak) > 0
+          ? Number(profile?.sage_streak)
+          : DEFAULT_CONSOLIDATION_STREAK_DAYS;
+        const result = await this.runForUser(userId, date, streakDays);
+        ok += 1;
+        if (result.skippedXp) skippedXp += 1;
+        console.log(
+          `[CONSOLIDATION] cron ${date} user=${userId.slice(0, 8)}… ` +
+          `pending=${result.totalPending} confirmed=${result.totalConfirmed}` +
+          (result.skippedXp ? ' (xp skipped)' : ''),
+        );
+      } catch (err) {
+        failed += 1;
+        console.error(
+          `[CONSOLIDATION] cron ${date} user=${userId.slice(0, 8)}… failed: ` +
+          `${err instanceof Error ? err.message : err}`,
+        );
+      }
+    }
+
+    return { date, users: userIds.length, ok, skippedXp, failed };
   }
 }

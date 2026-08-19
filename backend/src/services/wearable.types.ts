@@ -19,7 +19,7 @@ export interface WearableReadinessData {
   date: string;            // YYYY-MM-DD
 }
 
-export type WearableProvider = 'oura' | 'garmin' | 'fitbit' | 'whoop';
+export type WearableProvider = 'oura' | 'garmin' | 'fitbit' | 'whoop' | 'google';
 
 export interface WearableTokens {
   access_token: string;

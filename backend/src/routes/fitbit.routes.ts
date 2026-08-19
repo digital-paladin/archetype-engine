@@ -2,6 +2,8 @@ import { Router, Request, Response } from 'express';
 import { getDataService } from '../services/data/dataService';
 import { FitbitService } from '../services/fitbit.service';
 import { authMiddleware } from '../middleware/auth.middleware';
+import { caughtErrorMessage } from '../utils/caughtError';
+import { syncSleepDebtFromJournalSafe } from '../services/sleepDebt.service';
 
 const router = Router();
 const fitbitService = new FitbitService();
@@ -31,8 +33,15 @@ router.get('/callback', async (req: Request, res: Response) => {
     return res.status(400).send('<h1>❌ No authorization code received</h1>');
   }
 
+  const ownerUserId = process.env.OWNER_USER_ID || '';
+  if (!ownerUserId) {
+    return res.status(500).send(
+      '<h1>❌ Auth Failed</h1><p>OWNER_USER_ID is not set on this server — cannot save Fitbit tokens.</p>',
+    );
+  }
+
   try {
-    await fitbitService.exchangeCode(code, process.env.OWNER_USER_ID || '');
+    await fitbitService.exchangeCode(code, ownerUserId);
     res.send(`
       <h1>✅ Fitbit Connected!</h1>
       <p>Sleep data will now sync automatically with your journal.</p>
@@ -40,7 +49,7 @@ router.get('/callback', async (req: Request, res: Response) => {
       <style>body { font-family: sans-serif; padding: 2rem; background: #1a1a2e; color: #e0d5f5; }</style>
     `);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Unknown error';
+    const msg = caughtErrorMessage(err);
     console.error(`[FITBIT] Code exchange failed: ${msg}`);
     res.status(500).send(`<h1>❌ Auth Failed</h1><p>${msg}</p>`);
   }
@@ -70,17 +79,20 @@ router.get('/sleep/today', authMiddleware, async (req: Request, res: Response) =
   const clientDate = typeof req.query.date === 'string' ? req.query.date : undefined;
   const userId = (req as any).userId as string;
 
-  // Check DB cache first — only hit Fitbit API if fitbit_score is still 0
+  // Check DB cache first — only hit Fitbit API if sleep_hours isn't logged yet.
+  // Gate on sleep_hours (not fitbit_score): a manual edit that adds nap time
+  // the wearable didn't capture only sets sleep_hours, and must survive a
+  // later same-day auto-sync call rather than being silently overwritten.
   try {
     console.log('[FITBIT] Checking DB cache for today\'s sleep data...');
     const db         = getDataService();
     const dateStr    = clientDate ?? new Date().toLocaleDateString('en-CA');
     const entry      = await db.getJournalEntry(userId, dateStr);
-    if (entry?.fitbit_score && entry.fitbit_score > 0) {
+    if (entry?.sleep_hours && entry.sleep_hours > 0) {
       const cached = {
-        score:       entry.fitbit_score,
+        score:       entry.fitbit_score ?? 0,
         hours:       entry.sleep_hours ?? 0,
-        vitality:    entry.fitbit_score / 10,
+        vitality:    (entry.fitbit_score ?? 0) / 10,
         startTime:   entry.sleep_start ?? undefined,
         endTime:     entry.sleep_end   ?? undefined,
         deep_min: 0, rem_min: 0, light_min: 0, awake_min: 0, efficiency: 0,
@@ -92,7 +104,7 @@ router.get('/sleep/today', authMiddleware, async (req: Request, res: Response) =
       console.log('[FITBIT] ═════════════════════════════════════════\n');
       return res.json({ success: true, sleep: cached, source: 'cache' });
     }
-    console.log('[FITBIT] Cache MISS (score=0 or not found) — will fetch from Fitbit API');
+    console.log('[FITBIT] Cache MISS (no sleep_hours logged) — will fetch from Fitbit API');
   } catch (err) {
     console.warn(`[FITBIT] DB cache read failed (non-fatal): ${err instanceof Error ? err.message : err}`);
   }
@@ -125,6 +137,7 @@ router.get('/sleep/today', authMiddleware, async (req: Request, res: Response) =
         sleep_end:    sleep.endTime   ?? undefined,
       });
       console.log(`[FITBIT] \u2705 Sleep data persisted to DB`);
+      await syncSleepDebtFromJournalSafe(userId);
     } catch (dbErr) {
       console.error(`[FITBIT] \u274c DB sleep write failed (non-fatal): ${dbErr instanceof Error ? dbErr.message : dbErr}`);
     }
@@ -132,7 +145,7 @@ router.get('/sleep/today', authMiddleware, async (req: Request, res: Response) =
     console.log('[FITBIT] ═════════════════════════════════════════\n');
     res.json({ success: true, sleep, source: 'fitbit' });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Unknown error';
+    const msg = caughtErrorMessage(err);
     console.error(`[FITBIT] ❌ Sleep fetch failed: ${msg}`);
     if (err instanceof Error && err.stack) console.error(`[FITBIT] Stack: ${err.stack}`);
     console.log('[FITBIT] ═════════════════════════════════════════\n');
@@ -162,6 +175,19 @@ router.get('/sleep/week', authMiddleware, async (req: Request, res: Response) =>
       const sleep = await fitbitService.getSleepData(dateStr, userId);
       days.push({ date: dateStr, ...sleep });
       console.log(`[FITBIT]   ${dateStr}: ${sleep.hours}hrs score=${sleep.score} vitality=${sleep.vitality}`);
+      if (sleep.hours > 0) {
+        try {
+          await getDataService().upsertJournalEntry(userId, {
+            entry_date: dateStr,
+            sleep_hours: sleep.hours,
+            fitbit_score: sleep.score,
+            sleep_start: sleep.startTime,
+            sleep_end: sleep.endTime,
+          });
+        } catch (persistErr) {
+          console.warn(`[FITBIT] journal persist ${dateStr} failed: ${persistErr instanceof Error ? persistErr.message : persistErr}`);
+        }
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(`[FITBIT]   ${dateStr}: no data (${msg})`);
@@ -171,6 +197,7 @@ router.get('/sleep/week', authMiddleware, async (req: Request, res: Response) =>
 
   console.log(`[FITBIT] Returning ${days.length} days (most recent first)`);
   console.log('[FITBIT] ═══════════════════════════════════════\n');
+  await syncSleepDebtFromJournalSafe(userId);
   res.json({ success: true, days });
 });
 
@@ -212,7 +239,7 @@ router.get('/activities/today', authMiddleware, async (req: Request, res: Respon
     console.log('[FITBIT] ═══════════════════════════════════════\n');
     res.json({ success: true, ...data });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Unknown error';
+    const msg = caughtErrorMessage(err);
     console.error(`[FITBIT] ❌ Activities fetch failed: ${msg}`);
     console.log('[FITBIT] ═══════════════════════════════════════\n');
     if (msg.includes('403')) {
@@ -249,7 +276,7 @@ router.get('/nutrition/today', authMiddleware, async (req: Request, res: Respons
     console.log('[FITBIT] ═══════════════════════════════════════\n');
     res.json({ success: true, ...data });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Unknown error';
+    const msg = caughtErrorMessage(err);
     console.error(`[FITBIT] ❌ Food log fetch failed: ${msg}`);
     console.log('[FITBIT] ═══════════════════════════════════════\n');
     if (msg.includes('403')) {
@@ -287,7 +314,7 @@ router.get('/vitals/today', authMiddleware, async (req, res) => {
     console.log('[FITBIT] ═══════════════════════════════════════\n');
     res.json({ success: true, ...vitals });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Unknown error';
+    const msg = caughtErrorMessage(err);
     console.error(`[FITBIT] ❌ Vitals fetch failed: ${msg}`);
     console.log('[FITBIT] ═══════════════════════════════════════\n');
     res.status(500).json({ success: false, error: msg });

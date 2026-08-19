@@ -119,10 +119,12 @@ export interface VitalsData {
             <span class="eso-placeholder-icon">💤</span>
             <p class="eso-placeholder-text">No sleep data for today</p>
             <p class="eso-placeholder-sub">
-              Connect Oura (or legacy Fitbit) or wait until morning data syncs.<br>
+              Connect Oura, Fitbit / Pixel Watch (Google Health), or wait until morning data syncs.<br>
               <button type="button" class="fitbit-link" (click)="connectOura()">Authorize Oura →</button>
               <span class="wearable-sep">·</span>
-              <a [href]="fitbitAuthUrl" class="fitbit-link">Fitbit (legacy) →</a>
+              <button type="button" class="fitbit-link" (click)="connectGoogleHealth()">Fitbit / Pixel Watch (Google Health) →</button>
+              <span class="wearable-sep">·</span>
+              <a [href]="fitbitAuthUrl" class="fitbit-link">Fitbit Web API (legacy) →</a>
             </p>
           </div>
         </section>
@@ -216,7 +218,7 @@ export interface VitalsData {
           <div class="week-bar-wrap" *ngFor="let day of weekReversed()">
             <div class="week-bar-outer">
               <div class="week-bar-fill"
-                   [class]="weekBarClass(day.score)"
+                   [class]="weekBarClass(day.hours)"
                    [style.height.%]="weekBarHeight(day.hours)">
               </div>
             </div>
@@ -259,13 +261,13 @@ export interface VitalsData {
         <h3 class="eso-panel-title">📆 30-Day Paydown Trend</h3>
 
         <div class="month-chart">
-          <!-- 8 hr baseline indicator -->
-          <div class="baseline-line" title="8 Hour Baseline"></div>
+          <!-- 7.5 hr baseline indicator -->
+          <div class="baseline-line" title="7.5 Hour Baseline"></div>
           
           <div class="month-bar-wrap" *ngFor="let day of monthReversed()" title="{{ day.date }}: {{ day.hours }} hrs (Score: {{ day.score }})">       
             <div class="month-bar-outer">
               <div class="month-bar-fill"
-                   [class]="monthBarClass(day.hours, day.score)"
+                   [class]="monthBarClass(day.hours)"
                    [style.height.%]="monthBarHeight(day.hours)">
               </div>
             </div>
@@ -275,8 +277,8 @@ export interface VitalsData {
         </div>
 
         <div class="week-legend" style="margin-top: 24px;">
-          <span class="legend-item"><span class="legend-dot" style="background:#6fcf97"></span>Paydown (&gt;8h)</span>
-          <span class="legend-item"><span class="legend-dot" style="background:#c9a84c"></span>Maintenance (6-8h)</span>
+          <span class="legend-item"><span class="legend-dot" style="background:#6fcf97"></span>Paydown (≥7.5h)</span>
+          <span class="legend-item"><span class="legend-dot" style="background:#c9a84c"></span>Short (6–7.5h)</span>
           <span class="legend-item"><span class="legend-dot" style="background:#e05c44"></span>Deficit (&lt;6h)</span>
         </div>
       </section>
@@ -580,7 +582,7 @@ export interface VitalsData {
       border-bottom: 1px dashed rgba(255,255,255,0.4);
       pointer-events: none;
       z-index: 10;
-      height: 66.6%;
+      height: 75%; /* 7.5h of 10h max bar */
     }
     .bar-paydown    { background: #6fcf97 !important; }
     .bar-maintenance{ background: #c9a84c !important; }
@@ -843,6 +845,26 @@ export class SleepPanelComponent implements OnChanges {
     });
   }
 
+  connectGoogleHealth(): void {
+    this.http.get<{ success: boolean; url?: string; error?: string }>(
+      `${environment.apiUrl}/api/google-health/connect-url`
+    ).subscribe({
+      next: (res) => {
+        if (res.success && res.url) {
+          window.location.href = res.url;
+        } else {
+          console.warn('[SleepPanel] Google Health connect failed:', res.error);
+          alert(res.error || 'Google Health is not configured yet.');
+        }
+      },
+      error: (err) => {
+        const msg = err?.error?.error || 'Could not start Google Health authorization.';
+        console.warn('[SleepPanel] Google Health connect error:', msg);
+        alert(msg);
+      },
+    });
+  }
+
   monthReversed(): SleepDayData[] {
     if (!this.month) return [];
     // slice() creates a copy so we don't mutate the input array
@@ -944,19 +966,18 @@ export class SleepPanelComponent implements OnChanges {
     return Math.min((hours / 10) * 100, 100);
   }
 
-  weekBarClass(score: number): string {
-    if (score <= 0) return 'week-bar-fill bar-none';
-    if (score >= 75) return 'week-bar-fill bar-excellent';
-    if (score >= 55) return 'week-bar-fill bar-good';
+  weekBarClass(hours: number): string {
+    if (hours <= 0) return 'week-bar-fill bar-none';
+    if (hours >= 7.5) return 'week-bar-fill bar-excellent';
+    if (hours >= 6) return 'week-bar-fill bar-good';
     return 'week-bar-fill bar-poor';
   }
 
-  monthBarClass(hours: number, score: number): string {
+  monthBarClass(hours: number): string {
     if (hours <= 0) return 'week-bar-fill bar-none';
-    if (hours >= 8) return 'week-bar-fill bar-paydown'; // e.g. green for paying down debt
-    if (score >= 75) return 'week-bar-fill bar-excellent';
-    if (score >= 55) return 'week-bar-fill bar-good';
-    return 'week-bar-fill bar-poor';
+    if (hours >= 7.5) return 'week-bar-fill bar-paydown';
+    if (hours >= 6) return 'week-bar-fill bar-good';
+    return 'week-bar-fill bar-deficit';
   }
 
   monthBarHeight(hours: number): number {

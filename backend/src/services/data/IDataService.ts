@@ -165,6 +165,7 @@ export interface IDataService {
   // ── Journal ────────────────────────────────────────────────────────────
   getJournalEntry(userId: string, date: string): Promise<JournalEntry | null>;
   upsertJournalEntry(userId: string, entry: Partial<JournalEntry>): Promise<void>;
+  listJournalSleepRange(userId: string, fromDate: string, toDate: string): Promise<Array<{ date: string; hours: number; score: number }>>;
 
   // ── ACM ────────────────────────────────────────────────────────────────
   getACMEntries(userId: string, date: string): Promise<ACMEntry[]>;

@@ -1,12 +1,79 @@
 import { Router, Request, Response } from 'express';
 import { getDataService } from '../services/data/dataService';
 import { JournalEntry } from '../services/data/IDataService';
+import { OuraService } from '../services/oura.service';
+import { GoogleHealthService } from '../services/googleHealth.service';
+import { FitbitService } from '../services/fitbit.service';
+import {
+  applyWearableNights,
+  calendarDaysNewestFirst,
+  localDateStr,
+  mergeJournalIntoCalendar,
+  missingSleepDates,
+} from '../services/sleepHistoryCalendar';
+import { syncSleepDebtFromJournalSafe } from '../services/sleepDebt.service';
 
 const router = Router();
 const db = getDataService();
 
 function todayDateStr(): string {
-  return new Date().toLocaleDateString('en-CA');
+  return localDateStr();
+}
+
+async function backfillWearableSleep(
+  userId: string,
+  fromDate: string,
+  toDate: string,
+  missing: string[],
+): Promise<Array<{ date: string; hours: number; score: number }>> {
+  if (missing.length === 0) return [];
+  const missingSet = new Set(missing);
+  const oura = new OuraService();
+  const googleHealth = new GoogleHealthService();
+  const fitbit = new FitbitService();
+
+  try {
+    if (oura.isConfigured() && await oura.hasTokens(userId)) {
+      const nights: Array<{ date: string; hours: number; score: number }> = [];
+      for (const date of missing) {
+        try {
+          const sleep = await oura.getSleepData(date, userId);
+          if (sleep.hours > 0) nights.push({ date, hours: sleep.hours, score: sleep.score });
+        } catch { /* skip night */ }
+      }
+      if (nights.length > 0) return nights;
+    }
+  } catch (err) {
+    console.warn(`[DAILY] Oura sleep range skipped: ${err instanceof Error ? err.message : err}`);
+  }
+
+  try {
+    if (googleHealth.isConfigured() && await googleHealth.hasTokens(userId)) {
+      const nights: Array<{ date: string; hours: number; score: number }> = [];
+      for (const date of missing) {
+        try {
+          const sleep = await googleHealth.getSleepData(date, userId);
+          if (sleep.hours > 0) nights.push({ date, hours: sleep.hours, score: sleep.score });
+        } catch { /* skip night */ }
+      }
+      if (nights.length > 0) return nights;
+    }
+  } catch (err) {
+    console.warn(`[DAILY] Google Health sleep range skipped: ${err instanceof Error ? err.message : err}`);
+  }
+
+  try {
+    if (fitbit.isConfigured()) {
+      const range = await fitbit.getSleepRange(fromDate, toDate, userId);
+      return range
+        .filter(n => missingSet.has(n.date) && n.hours > 0)
+        .map(n => ({ date: n.date, hours: n.hours, score: n.score }));
+    }
+  } catch (err) {
+    console.warn(`[DAILY] Fitbit sleep range skipped: ${err instanceof Error ? err.message : err}`);
+  }
+
+  return [];
 }
 
 /** Map a JournalEntry DB row to the legacy response shape the frontend expects */
@@ -66,21 +133,32 @@ router.get('/', async (req: Request, res: Response) => {
 router.get('/sleep-history', async (req: Request, res: Response) => {
   try {
     const userId = (req as any).userId as string;
-    // Direct DB access for sleep history (no IDataService method yet)
-    const svc = db as any;
-    const { data, error } = await svc.db
-      .from('daily_journal_entries')
-      .select('entry_date, sleep_hours, fitbit_score')
-      .eq('user_id', userId)
-      .order('entry_date', { ascending: false })
-      .limit(30);
-    if (error) throw error;
-    const history = (data ?? []).map((r: any) => ({
-      date:  r.entry_date,
-      hours: r.sleep_hours  ?? 0,
-      score: r.fitbit_score ?? 0,
-    }));
-    res.json({ success: true, history });
+    const daysParam = parseInt(req.query.days as string, 10);
+    const days = Number.isFinite(daysParam) && daysParam > 0 && daysParam <= 100 ? daysParam : 30;
+    const end = todayDateStr();
+    const dates = calendarDaysNewestFirst(end, days);
+    const fromDate = dates[dates.length - 1];
+    const journal = await db.listJournalSleepRange(userId, fromDate, end);
+    let slots = mergeJournalIntoCalendar(dates, journal);
+    const missing = missingSleepDates(slots);
+    if (missing.length > 0) {
+      const nights = await backfillWearableSleep(userId, fromDate, end, missing);
+      slots = applyWearableNights(slots, nights);
+      for (const night of nights) {
+        if (!(night.hours > 0)) continue;
+        try {
+          await db.upsertJournalEntry(userId, {
+            entry_date: night.date,
+            sleep_hours: night.hours,
+            fitbit_score: night.score,
+          });
+        } catch (persistErr) {
+          console.warn(`[DAILY] sleep persist ${night.date} failed: ${persistErr instanceof Error ? persistErr.message : persistErr}`);
+        }
+      }
+    }
+    await syncSleepDebtFromJournalSafe(userId);
+    res.json({ success: true, history: slots });
   } catch (e: any) {
     console.error('[DAILY] Error sleep-history:', e.message);
     res.status(500).json({ success: false, error: e.message });
@@ -123,6 +201,9 @@ router.post('/', async (req: Request, res: Response) => {
     }
 
     await db.upsertJournalEntry(userId, patch);
+    if (patch.sleep_hours != null) {
+      await syncSleepDebtFromJournalSafe(userId);
+    }
     console.log('[DAILY METRICS POST] Updated ' + date);
     res.json({ success: true });
   } catch (e: any) {
