@@ -338,7 +338,7 @@ Three parallel jobs run on every PR and push to `main`:
 | `PLAYWRIGHT_USERNAME` | Owner or dedicated e2e test account email |
 | `PLAYWRIGHT_PASSWORD` | Matching password |
 
-E2e hits production (or staging) — same vars as `frontend/e2e/.env.playwright`. Fork PRs skip the e2e job (secrets unavailable). On failure, download the `playwright-report` artifact from the workflow run.
+E2e hits production (or staging) — same vars as `frontend/e2e/.env.playwright`. The Playwright job **skips** (does not fail) until all four secrets are set, and on fork PRs (secrets unavailable). On failure, download the `playwright-report` artifact from the workflow run.
 
 Local equivalents:
 

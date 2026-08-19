@@ -65,8 +65,14 @@ jobs:
     name: Playwright (e2e)
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Fork PRs cannot read repo secrets — skip rather than fail opaquely.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # Skip when secrets are unset (first-time setup) or on fork PRs (secrets unavailable).
+    # Job is skipped, not failed — Jest/Vitest still gate the PR.
+    if: >
+      secrets.PLAYWRIGHT_BASE_URL != '' &&
+      secrets.PLAYWRIGHT_API_URL != '' &&
+      secrets.PLAYWRIGHT_USERNAME != '' &&
+      secrets.PLAYWRIGHT_PASSWORD != '' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     defaults:
       run:
         working-directory: frontend
