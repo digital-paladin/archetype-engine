@@ -7,7 +7,7 @@ import * as path from 'path';
 import { XPProjectionService, XPProjection } from '../services/xpProjection.service';
 import { getSupabaseAdmin } from '../lib/supabase';
 import { getDataService } from '../services/data/dataService';
-import { syncSleepDebtFromJournalSafe } from '../services/sleepDebt.service';
+import { syncSleepDebtFromJournal } from '../services/sleepDebt.service';
 
 const router = Router();
 
@@ -20,7 +20,7 @@ router.get('/vitality-status', async (req: Request, res: Response) => {
     // DB-first: character_profile (sleep debt catch-up from journal nights)
     const userId = (req as any).userId as string | undefined;
     if (userId) {
-      await syncSleepDebtFromJournalSafe(userId);
+      const sync = await syncSleepDebtFromJournal(userId).catch(() => null);
       const db = getDataService();
       const profile = await db.getCharacterProfile(userId).catch(() => null);
       if (profile?.sleep_debt !== undefined) {
@@ -38,6 +38,8 @@ router.get('/vitality-status', async (req: Request, res: Response) => {
           sleepDebt,
           trend:     profile.sleep_trend ?? 'Stable',
           flag:      '',
+          sleepExtensionStreak: sync?.extensionStreak ?? profile.sleep_extension_streak ?? 0,
+          sleepExtensionBonusPct: sync?.extensionBonusPct ?? 0,
         });
       }
     }
@@ -109,7 +111,9 @@ router.get('/vitality-status', async (req: Request, res: Response) => {
       status: status,
       sleepDebt: sleepDebt,
       trend: trendMatch ? trendMatch[1].trim() : '',
-      flag
+      flag,
+      sleepExtensionStreak: 0,
+      sleepExtensionBonusPct: 0,
     });
   } catch (err) {
     // File read failed — fall back to the most recent Fitbit score from Supabase.

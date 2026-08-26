@@ -1,8 +1,14 @@
 import {
+  combinedExtensionBonusPct,
+  computeExtensionStreak,
   computeRollingSleepDebt,
+  extensionStreakBonusPct,
   nightlyDeficit,
+  nightlyExtensionBonusPct,
+  nightlySurplus,
   selectNightsInWindow,
   SLEEP_DEBT_WINDOW_DAYS,
+  SLEEP_EXTENSION_LOOKBACK_DAYS,
   sleepTrendFromDebt,
   syncSleepDebtFromJournal,
   vitalityFromSleepDebt,
@@ -104,7 +110,10 @@ describe('syncSleepDebtFromJournal', () => {
     const patch = upsert.mock.calls[0][1];
     expect(patch.sleep_debt).toBe(3.2);
     expect(patch.vitality).toBe(100);
-    expect(db.listJournalSleepRange).toHaveBeenCalledWith('user-1', '2026-08-04', '2026-08-17');
+    expect(db.listJournalSleepRange).toHaveBeenCalledWith('user-1', '2026-07-19', '2026-08-17');
+    expect(patch.sleep_extension_streak).toBe(0);
+    expect(result?.extensionStreak).toBe(0);
+    expect(result?.extensionBonusPct).toBe(0);
   });
 
   it('is 0 when there are no logged nights in the window', async () => {
@@ -116,7 +125,12 @@ describe('syncSleepDebtFromJournal', () => {
     }, '2026-08-17');
     expect(result?.sleepDebt).toBe(0);
     expect(result?.vitality).toBe(100);
-    expect(upsert).toHaveBeenCalledWith('user-1', { vitality: 100, sleep_debt: 0, sleep_trend: 'Decreased' });
+    expect(upsert).toHaveBeenCalledWith('user-1', {
+      vitality: 100,
+      sleep_debt: 0,
+      sleep_trend: 'Decreased',
+      sleep_extension_streak: 0,
+    });
   });
 
   it('skips when there is no character_profile row', async () => {
@@ -126,5 +140,80 @@ describe('syncSleepDebtFromJournal', () => {
       upsertCharacterProfile: jest.fn(),
     });
     expect(result).toBeNull();
+  });
+
+  it('persists a 5-night ≥9h streak and a nightly surplus bonus', async () => {
+    const upsert = jest.fn().mockResolvedValue(undefined);
+    const nights = [
+      { date: '2026-08-13', hours: 9.0, score: 90 },
+      { date: '2026-08-14', hours: 9.2, score: 88 },
+      { date: '2026-08-15', hours: 9.5, score: 91 },
+      { date: '2026-08-16', hours: 10.0, score: 85 },
+      { date: '2026-08-17', hours: 9.5, score: 92 },
+    ];
+    const result = await syncSleepDebtFromJournal('user-1', {
+      getCharacterProfile: jest.fn().mockResolvedValue({ sleep_debt: 0 }),
+      listJournalSleepRange: jest.fn().mockResolvedValue(nights),
+      upsertCharacterProfile: upsert,
+    }, '2026-08-17');
+    expect(result?.extensionStreak).toBe(5);
+    // 9.5h → 2.0 surplus → +10% nightly; 5-night streak → +5%; combined 15.5%
+    expect(result?.extensionBonusPct).toBe(15.5);
+    expect(upsert.mock.calls[0][1].sleep_extension_streak).toBe(5);
+  });
+});
+
+describe('nightlySurplus / nightlyExtensionBonusPct', () => {
+  it('is 0 at or below the 7.5h baseline', () => {
+    expect(nightlySurplus(7.5)).toBe(0);
+    expect(nightlySurplus(6)).toBe(0);
+    expect(nightlyExtensionBonusPct(7.5)).toBe(0);
+  });
+
+  it('scales +5% per surplus hour and caps at 2h / +10%', () => {
+    expect(nightlySurplus(8.5)).toBe(1);
+    expect(nightlyExtensionBonusPct(8.5)).toBe(5);
+    expect(nightlySurplus(9.5)).toBe(2);
+    expect(nightlyExtensionBonusPct(9.5)).toBe(10);
+    expect(nightlySurplus(12)).toBe(2);
+    expect(nightlyExtensionBonusPct(12)).toBe(10);
+  });
+});
+
+describe('computeExtensionStreak / extensionStreakBonusPct', () => {
+  it('counts consecutive ≥9h nights ending today and breaks on a gap', () => {
+    const nights = [
+      { date: '2026-08-14', hours: 9 },
+      { date: '2026-08-15', hours: 9.2 },
+      { date: '2026-08-16', hours: 7.0 }, // break
+      { date: '2026-08-17', hours: 9.5 },
+    ];
+    expect(computeExtensionStreak(nights, { today: '2026-08-17' })).toBe(1);
+  });
+
+  it('is 0 when today is missing or below threshold', () => {
+    expect(computeExtensionStreak([{ date: '2026-08-16', hours: 10 }], { today: '2026-08-17' })).toBe(0);
+  });
+
+  it('tiers 0 / 5 / 10 / 15 at 4, 5, 10, 14 nights', () => {
+    expect(extensionStreakBonusPct(4)).toBe(0);
+    expect(extensionStreakBonusPct(5)).toBe(5);
+    expect(extensionStreakBonusPct(9)).toBe(5);
+    expect(extensionStreakBonusPct(10)).toBe(10);
+    expect(extensionStreakBonusPct(13)).toBe(10);
+    expect(extensionStreakBonusPct(14)).toBe(15);
+  });
+
+  it('lookback default is 30 days', () => {
+    expect(SLEEP_EXTENSION_LOOKBACK_DAYS).toBe(30);
+  });
+});
+
+describe('combinedExtensionBonusPct', () => {
+  it('multiplies nightly and streak layers', () => {
+    // 9.5h → +10%; 14-night streak → +15%; 1.10 * 1.15 − 1 = 26.5%
+    expect(combinedExtensionBonusPct(9.5, 14)).toBe(26.5);
+    expect(combinedExtensionBonusPct(7.5, 14)).toBe(15);
+    expect(combinedExtensionBonusPct(9.5, 0)).toBe(10);
   });
 });

@@ -113,6 +113,7 @@ export async function seedDemoHunter(userId: string, email: string): Promise<voi
   await db.upsertCharacterProfile(userId, {
     vitality: 88,
     sleep_debt: 1.5,
+    sleep_extension_streak: 0,
     sage_streak: 12,
     phase: 'foundation',
     acm_metrics: { pleasure: 7, clarity: 8, vitality: 8 },

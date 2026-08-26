@@ -13,6 +13,17 @@ import { addCalendarDays, localDateStr } from './sleepHistoryCalendar';
 export const SLEEP_BASELINE_HOURS = 7.5;
 export const SLEEP_DEBT_WINDOW_DAYS = 14;
 
+/** Surplus hours counted toward the nightly extension bonus (mirror of deficit, capped). */
+export const SLEEP_EXTENSION_CAP_HOURS = 2;
+/** Consecutive nights at or above this duration count toward the streak bonus. */
+export const SLEEP_EXTENSION_STREAK_HOURS = 9;
+/** Streak bonus is 0 until this many consecutive ≥9h nights. */
+export const SLEEP_EXTENSION_STREAK_MIN_NIGHTS = 5;
+/** How far back to walk when recomputing the extension streak. */
+export const SLEEP_EXTENSION_LOOKBACK_DAYS = 30;
+/** +5% consolidation per surplus hour, so cap hours → +10%. */
+export const SLEEP_EXTENSION_PCT_PER_SURPLUS_HOUR = 5;
+
 export interface SleepNightInput {
   date: string;
   hours: number;
@@ -24,6 +35,8 @@ export interface SleepDebtSyncResult {
   sleepDebt: number;
   vitality: number;
   sleepTrend: string;
+  extensionStreak: number;
+  extensionBonusPct: number;
 }
 
 type SleepDebtDb = {
@@ -81,6 +94,64 @@ export function sleepTrendFromDebt(prev: number, next: number): 'Increased' | 'D
   return 'Stable';
 }
 
+/**
+ * Surplus hours above the 7.5h baseline, capped at SLEEP_EXTENSION_CAP_HOURS.
+ * Oversleep does not reduce sleep_debt — this is a separate reward track.
+ */
+export function nightlySurplus(hours: number): number {
+  if (!(hours > 0) || hours <= SLEEP_BASELINE_HOURS) return 0;
+  const raw = hours - SLEEP_BASELINE_HOURS;
+  return Math.round(Math.min(raw, SLEEP_EXTENSION_CAP_HOURS) * 100) / 100;
+}
+
+/** Immediate per-night bonus percent: +5% per surplus hour, max +10%. */
+export function nightlyExtensionBonusPct(hours: number): number {
+  return Math.round(nightlySurplus(hours) * SLEEP_EXTENSION_PCT_PER_SURPLUS_HOUR * 100) / 100;
+}
+
+/**
+ * Consecutive nights ending on `today` with hours >= 9.
+ * Breaks on the first missing or sub-threshold night (including today).
+ * Recomputed from journal rows — not a running accumulator.
+ */
+export function computeExtensionStreak(
+  nights: Array<{ date: string; hours: number }>,
+  opts: { today: string; lookbackDays?: number; thresholdHours?: number },
+): number {
+  const lookback = opts.lookbackDays ?? SLEEP_EXTENSION_LOOKBACK_DAYS;
+  const threshold = opts.thresholdHours ?? SLEEP_EXTENSION_STREAK_HOURS;
+  const byDate = new Map<string, number>();
+  for (const n of nights) {
+    byDate.set(String(n.date).slice(0, 10), Number(n.hours) || 0);
+  }
+  let streak = 0;
+  for (let i = 0; i < lookback; i++) {
+    const date = addCalendarDays(opts.today, -i);
+    const hours = byDate.get(date) ?? 0;
+    if (hours >= threshold) streak += 1;
+    else break;
+  }
+  return streak;
+}
+
+/**
+ * Sustained-streak bonus percent. 0 until 5 consecutive ≥9h nights
+ * (Mah et al. 2011 needed multiple weeks of extension for the athletic gains).
+ */
+export function extensionStreakBonusPct(streakNights: number): number {
+  if (streakNights < SLEEP_EXTENSION_STREAK_MIN_NIGHTS) return 0;
+  if (streakNights < 10) return 5;
+  if (streakNights < 14) return 10;
+  return 15;
+}
+
+/** Combined multiplicative bonus as a percent: (1+n)(1+s) − 1. */
+export function combinedExtensionBonusPct(hours: number, streakNights: number): number {
+  const nightly = nightlyExtensionBonusPct(hours);
+  const streak = extensionStreakBonusPct(streakNights);
+  return Math.round(((1 + nightly / 100) * (1 + streak / 100) - 1) * 1000) / 10;
+}
+
 export async function syncSleepDebtFromJournal(
   userId: string,
   db: SleepDebtDb = getDataService(),
@@ -89,8 +160,8 @@ export async function syncSleepDebtFromJournal(
   const profile = await db.getCharacterProfile(userId);
   if (!profile) return null;
 
-  const windowStart = addCalendarDays(today, -(SLEEP_DEBT_WINDOW_DAYS - 1));
-  const journal = await db.listJournalSleepRange(userId, windowStart, today);
+  const lookbackStart = addCalendarDays(today, -(SLEEP_EXTENSION_LOOKBACK_DAYS - 1));
+  const journal = await db.listJournalSleepRange(userId, lookbackStart, today);
   const inWindow = selectNightsInWindow(journal, { today });
 
   const sleepDebt = Math.round(
@@ -100,15 +171,21 @@ export async function syncSleepDebtFromJournal(
   const opening = Number(profile.sleep_debt) || 0;
   const sleepTrend = sleepTrendFromDebt(opening, sleepDebt);
 
+  const tonightHours = journal.find(n => String(n.date).slice(0, 10) === today)?.hours ?? 0;
+  const extensionStreak = computeExtensionStreak(journal, { today });
+  const extensionBonusPct = combinedExtensionBonusPct(tonightHours, extensionStreak);
+
   await db.upsertCharacterProfile(userId, {
     vitality,
     sleep_debt: sleepDebt,
     sleep_trend: sleepTrend,
+    sleep_extension_streak: extensionStreak,
   });
 
   console.log(
     `[SLEEP-DEBT] ${userId.slice(0, 8)}… 14-day rolling debt: ${opening} → ${sleepDebt} ` +
-    `(${inWindow.length} logged night(s) in window)`,
+    `(${inWindow.length} logged night(s) in window); extension streak ${extensionStreak} ` +
+    `(tonight +${extensionBonusPct}%)`,
   );
 
   return {
@@ -116,6 +193,8 @@ export async function syncSleepDebtFromJournal(
     sleepDebt,
     vitality,
     sleepTrend,
+    extensionStreak,
+    extensionBonusPct,
   };
 }
 

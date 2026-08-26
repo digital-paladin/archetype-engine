@@ -2,7 +2,7 @@
  * ConsolidationService
  *
  * End-of-day sleep consolidation:
- *   confirmed_xp = pending_xp × consolidationMultiplier × fitbitModifier
+ *   confirmed_xp = pending_xp × consolidationMultiplier × fitbitModifier × extensionModifier
  *
  * "Pending XP" is the raw XP earned from activities for the day (from Supabase activity_log).
  * "Confirmed XP" is what gets permanently banked (after sleep quality multiplier).
@@ -77,20 +77,24 @@ export class ConsolidationService {
       pendingMap[cls] = (pendingMap[cls] ?? 0) + (row.xp_awarded as number);
     }
 
-    // 2. Get fitbit_score from daily_journal_entries
+    // 2. Get fitbit_score / sleep_hours from daily_journal_entries
     const journalEntry = await db.getJournalEntry(userId, date);
     const fitbitScore  = journalEntry?.fitbit_score ?? null;
+    const sleepHours   = journalEntry?.sleep_hours ?? 0;
 
-    // 3. Get ACM checked-item count for the date
+    // 3. Sleep debt + extension streak first so XP math can use tonight's surplus.
+    //    Pass `date` (the day being consolidated), not localDateStr().
+    const debtSync = await syncSleepDebtFromJournal(userId, db, date);
+    const extensionStreak = debtSync?.extensionStreak ?? 0;
+
+    // 4. Get ACM checked-item count for the date
     const acmEntries      = await db.getACMEntries(userId, date);
     const checkedAclCount = acmEntries.filter(e => e.completed).length;
     const aclBonus        = this.calc.getAclBonus(checkedAclCount);
 
-    // 4. Compute consolidation parameters
-    const { tierName } = this.calc.calculateConfirmedXP(0, streakDays, fitbitScore);
-    const consolidationPct = Math.round(
-      this.calc.getConsolidationMultiplier(streakDays) *
-      this.calc.getFitbitModifier(fitbitScore) * 100
+    // 5. Compute consolidation parameters (includes sleep-extension modifier)
+    const { tierName, consolidationPct } = this.calc.calculateConfirmedXP(
+      0, streakDays, fitbitScore, sleepHours, extensionStreak,
     );
 
     const { data: existingHist, error: histErr } = await supabase
@@ -110,11 +114,13 @@ export class ConsolidationService {
     if (skippedXp) {
       console.log(`[CONSOLIDATION] ${date} already in xp_history — skip bonus XP`);
     } else {
-    // 5. Load current character_stats to apply bonus XP correctly
+    // 6. Load current character_stats to apply bonus XP correctly
     const allStats = await db.getCharacterStats(userId);
 
     for (const [className, pendingXP] of Object.entries(pendingMap)) {
-      const { bonusXP } = this.calc.calculateConfirmedXP(pendingXP, streakDays, fitbitScore);
+      const { bonusXP } = this.calc.calculateConfirmedXP(
+        pendingXP, streakDays, fitbitScore, sleepHours, extensionStreak,
+      );
       const confirmedXP = pendingXP + bonusXP;
 
       // Apply ONLY the bonus delta (activity.routes.ts already credited pendingXP)
@@ -133,7 +139,7 @@ export class ConsolidationService {
         total_xp:   totalXP + bonusXP,
       });
 
-      // 6. Upsert xp_history row for the date
+      // 7. Upsert xp_history row for the date
       await supabase.from('xp_history').upsert(
         {
           user_id:           userId,
@@ -152,7 +158,7 @@ export class ConsolidationService {
       classResults.push({ className, pendingXP, bonusXP, confirmedXP, newLevel, leveledUp });
     }
 
-    // 7. Distribute ACL bonus XP equally across all active classes (if any)
+    // 8. Distribute ACL bonus XP equally across all active classes (if any)
     if (aclBonus > 0 && classResults.length > 0) {
       const bonusPerClass = Math.round(aclBonus / classResults.length);
       for (const r of classResults) {
@@ -178,12 +184,11 @@ export class ConsolidationService {
     }
     } // end skip-XP else
 
-    // 8. Sleep debt: 14-day rolling deficit sum from journal nights. Do not default missing hours to 7.5.
-    const debtSync = await syncSleepDebtFromJournal(userId, db);
     await db.upsertCharacterProfile(userId, { sage_streak: streakDays });
     console.log(
       `[CONSOLIDATION] character_profile updated — vitality: ${debtSync?.vitality ?? 'n/a'}, ` +
-      `sleepDebt: ${debtSync?.sleepDebt ?? 'n/a'}, trend: ${debtSync?.sleepTrend ?? 'n/a'}`,
+      `sleepDebt: ${debtSync?.sleepDebt ?? 'n/a'}, trend: ${debtSync?.sleepTrend ?? 'n/a'}, ` +
+      `extension: ${extensionStreak}n +${debtSync?.extensionBonusPct ?? 0}%`,
     );
 
     return {

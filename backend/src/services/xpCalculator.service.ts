@@ -1,3 +1,9 @@
+import {
+  combinedExtensionBonusPct,
+  nightlyExtensionBonusPct,
+  extensionStreakBonusPct,
+} from './sleepDebt.service';
+
 export interface ClassXpAward {
   /** Canonical class name used in journal entries (e.g. 'Artist', 'Sage', 'Developer') */
   class: string;
@@ -212,18 +218,44 @@ export class XpCalculatorService {
   }
 
   /**
+   * Sleep-extension modifier: 1 + combined nightly surplus and streak bonuses.
+   * Omit hours/streak (or pass 0) to leave confirmed XP unchanged.
+   */
+  getSleepExtensionModifier(
+    sleepHours?: number | null,
+    extensionStreakNights?: number | null,
+  ): number {
+    const nightly = nightlyExtensionBonusPct(Number(sleepHours) || 0);
+    const streak = extensionStreakBonusPct(Number(extensionStreakNights) || 0);
+    return (1 + nightly / 100) * (1 + streak / 100);
+  }
+
+  /**
+   * Combined sleep-extension bonus as a display percent (same math as the modifier).
+   */
+  getSleepExtensionBonusPct(
+    sleepHours?: number | null,
+    extensionStreakNights?: number | null,
+  ): number {
+    return combinedExtensionBonusPct(Number(sleepHours) || 0, Number(extensionStreakNights) || 0);
+  }
+
+  /**
    * Calculate confirmed XP from pending XP after sleep consolidation.
-   *   confirmed = pending × consolidationMultiplier × fitbitModifier
+   *   confirmed = pending × consolidationMultiplier × fitbitModifier × extensionModifier
    */
   calculateConfirmedXP(
     pendingXP: number,
     streakDays: number,
     fitbitScore: number | null,
+    sleepHours?: number | null,
+    extensionStreakNights?: number | null,
   ): { confirmed: number; bonusXP: number; consolidationPct: number; tierName: string } {
     const multiplier       = this.getConsolidationMultiplier(streakDays);
     const fitbitMod        = this.getFitbitModifier(fitbitScore);
-    const consolidationPct = Math.round(multiplier * fitbitMod * 100);
-    const confirmed        = Math.round(pendingXP * multiplier * fitbitMod);
+    const extensionMod     = this.getSleepExtensionModifier(sleepHours, extensionStreakNights);
+    const consolidationPct = Math.round(multiplier * fitbitMod * extensionMod * 100);
+    const confirmed        = Math.round(pendingXP * (consolidationPct / 100));
     const bonusXP          = confirmed - pendingXP;
     return { confirmed, bonusXP, consolidationPct, tierName: this.getConsolidationTierName(streakDays) };
   }

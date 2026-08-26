@@ -210,6 +210,33 @@ export interface VitalsData {
         </div>
       </section>
 
+      <!-- ── Sleep Extension (surplus above 7.5h — does not pay down debt) ── -->
+      <section class="eso-panel sleep-card" *ngIf="extensionBonusPct !== null || extensionStreak !== null">
+        <h3 class="eso-panel-title">🌙 Sleep Extension</h3>
+        <div class="debt-display">
+          <div class="eso-stat-row">
+            <span class="eso-label">Tonight's XP bonus</span>
+            <span class="eso-value" [class]="extensionBonusClass()">+{{ extensionBonusPct ?? 0 }}%</span>
+          </div>
+          <div class="eso-bar-track">
+            <div class="eso-bar-fill"
+                 [class]="extensionBarClass()"
+                 [style.width.%]="extensionBarWidth()"></div>
+          </div>
+          <div class="eso-stat-row">
+            <span class="eso-label">≥9h streak</span>
+            <span class="eso-value">{{ extensionStreak ?? 0 }} nights</span>
+          </div>
+          <div class="debt-note">
+            <span *ngIf="(extensionStreak ?? 0) === 0">Log 5 nights at 9h+ to unlock the streak bonus</span>
+            <span *ngIf="(extensionStreak ?? 0) > 0 && (extensionStreak ?? 0) < 5">{{ 5 - (extensionStreak ?? 0) }} more 9h+ night(s) to unlock +5%</span>
+            <span *ngIf="(extensionStreak ?? 0) >= 5 && (extensionStreak ?? 0) < 10">Streak bonus +5% — 10 nights unlocks +10%</span>
+            <span *ngIf="(extensionStreak ?? 0) >= 10 && (extensionStreak ?? 0) < 14">Streak bonus +10% — 14 nights unlocks +15%</span>
+            <span *ngIf="(extensionStreak ?? 0) >= 14">Streak bonus +15% — well-rested</span>
+          </div>
+        </div>
+      </section>
+
       <!-- ── 7-Day Trend ── -->
       <section class="eso-panel sleep-card" *ngIf="week && week.length > 0">
         <h3 class="eso-panel-title">📅 7-Day Sleep History</h3>
@@ -533,6 +560,11 @@ export interface VitalsData {
     .debt-bar-high     { background: #f2994a !important; }
     .debt-bar-critical { background: #eb5757 !important; }
 
+    .ext-bonus-none { color: var(--eso-text-dim, #8a7a5a) !important; }
+    .ext-bonus-on   { color: #6fcf97 !important; }
+    .ext-bar-none   { background: #4a4030 !important; }
+    .ext-bar-on     { background: linear-gradient(90deg, #6fcf97, #27ae60) !important; }
+
     /* ── 7-Day Trend Section ────────────────────────── */
     
     .month-chart {
@@ -822,6 +854,8 @@ export class SleepPanelComponent implements OnChanges {
   @Input() week: SleepDayData[] | null = null;
   @Input() month: SleepDayData[] | null = null;
   @Input() sleepDebt: number | null = null;
+  @Input() extensionStreak: number | null = null;
+  @Input() extensionBonusPct: number | null = null;
   @Input() activities: ActivitySummary | null = null;
   @Input() vitals: VitalsData | null = null;
 
@@ -952,6 +986,19 @@ export class SleepPanelComponent implements OnChanges {
   debtBarWidth(debt: number): number {
     // 20 hrs = 100% bar width
     return Math.min((debt / 20) * 100, 100);
+  }
+
+  // Combined bonus is typically 0–26.5% (10% nightly × 15% streak). Scale bar to 30%.
+  extensionBarWidth(): number {
+    return Math.min(((this.extensionBonusPct ?? 0) / 30) * 100, 100);
+  }
+
+  extensionBonusClass(): string {
+    return (this.extensionBonusPct ?? 0) > 0 ? 'ext-bonus-on' : 'ext-bonus-none';
+  }
+
+  extensionBarClass(): string {
+    return (this.extensionBonusPct ?? 0) > 0 ? 'ext-bar-on' : 'ext-bar-none';
   }
 
   // ── Week chart helpers ──────────────────────────────────────────────────────

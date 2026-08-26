@@ -176,6 +176,10 @@ const NAV_TABS: { id: PanelId; icon: string; label: string }[] = [
               <span class="eso-label">Sleep Debt</span>
               <span class="eso-value">{{ vitality.sleepDebt }} hrs</span>
             </div>
+            <div class="eso-stat-row" *ngIf="(vitality.sleepExtensionBonusPct ?? 0) > 0">
+              <span class="eso-label">Sleep Extension</span>
+              <span class="eso-value">+{{ vitality.sleepExtensionBonusPct }}% · {{ vitality.sleepExtensionStreak ?? 0 }}n</span>
+            </div>
             <div class="eso-stat-row" *ngIf="vitality.trend">
               <span class="eso-label">Trend</span>
               <span class="eso-value">{{ vitality.trend }}</span>
@@ -346,7 +350,10 @@ const NAV_TABS: { id: PanelId; icon: string; label: string }[] = [
             <app-body-diagram></app-body-diagram>
             <app-sleep-panel
               [activities]="activitiesData()"
-              [vitals]="vitalsData()">
+              [vitals]="vitalsData()"
+              [sleepDebt]="vitality.sleepDebt"
+              [extensionStreak]="vitality.sleepExtensionStreak ?? null"
+              [extensionBonusPct]="vitality.sleepExtensionBonusPct ?? null">
             </app-sleep-panel>
           </ng-container>
 
@@ -366,7 +373,9 @@ const NAV_TABS: { id: PanelId; icon: string; label: string }[] = [
               [today]="sleepData()"
               [week]="weekSleep()"
               [month]="monthSleep()"
-              [sleepDebt]="vitality.sleepDebt">
+              [sleepDebt]="vitality.sleepDebt"
+              [extensionStreak]="vitality.sleepExtensionStreak ?? null"
+              [extensionBonusPct]="vitality.sleepExtensionBonusPct ?? null">
             </app-sleep-panel>
           </ng-container>
 
@@ -490,7 +499,9 @@ export class DashboardComponent implements OnInit, OnDestroy {
     status: '',
     sleepDebt: null as number | null,
     trend: '',
-    flag: ''
+    flag: '',
+    sleepExtensionStreak: null as number | null,
+    sleepExtensionBonusPct: null as number | null,
   };
 
   stressEnergy = signal<{ stress: string | null; energy: number | null; mentalState: string } | null>(null);

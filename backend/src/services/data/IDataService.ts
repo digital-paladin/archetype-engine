@@ -123,6 +123,8 @@ export interface CharacterProfile {
   vitality?: number;
   sleep_debt?: number;
   sleep_trend?: string;   // 'Increased' | 'Decreased' | 'Stable'
+  /** Consecutive ≥9h nights ending today; recomputed on every sleep-debt sync. */
+  sleep_extension_streak?: number;
   sage_streak?: number;
   phase?: string;
   acm_metrics?: Record<string, unknown>;

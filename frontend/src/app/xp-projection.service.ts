@@ -19,6 +19,8 @@ export interface VitalityStatus {
   sleepDebt: number | null;
   trend: string;
   flag: string;
+  sleepExtensionStreak?: number | null;
+  sleepExtensionBonusPct?: number | null;
 }
 // xp-projection.service.ts
 // Angular service to fetch XP projection analytics from backend
