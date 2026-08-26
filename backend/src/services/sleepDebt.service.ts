@@ -82,10 +82,17 @@ export function computeRollingSleepDebt(
   return Math.round(total * 100) / 100;
 }
 
+/** 3-segment vitality curve (matches Sleep tab color tiers): flat 100 ≤2h, −2/h to 5h, −3/h above 5h. */
 export function vitalityFromSleepDebt(debt: number): number {
-  return debt > 5
-    ? Math.round(Math.max(0, 100 - (debt - 5) * 3) * 10) / 10
-    : 100;
+  let vitality: number;
+  if (debt <= 2) {
+    vitality = 100;
+  } else if (debt <= 5) {
+    vitality = 100 - (debt - 2) * 2;
+  } else {
+    vitality = Math.max(0, 94 - (debt - 5) * 3);
+  }
+  return Math.round(vitality * 10) / 10;
 }
 
 export function sleepTrendFromDebt(prev: number, next: number): 'Increased' | 'Decreased' | 'Stable' {

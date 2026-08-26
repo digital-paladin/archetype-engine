@@ -7,7 +7,7 @@ import * as path from 'path';
 import { XPProjectionService, XPProjection } from '../services/xpProjection.service';
 import { getSupabaseAdmin } from '../lib/supabase';
 import { getDataService } from '../services/data/dataService';
-import { syncSleepDebtFromJournal } from '../services/sleepDebt.service';
+import { syncSleepDebtFromJournal, vitalityFromSleepDebt } from '../services/sleepDebt.service';
 
 const router = Router();
 
@@ -25,8 +25,7 @@ router.get('/vitality-status', async (req: Request, res: Response) => {
       const profile = await db.getCharacterProfile(userId).catch(() => null);
       if (profile?.sleep_debt !== undefined) {
         const sleepDebt = profile.sleep_debt as number;
-        const vitality  = (profile.vitality as number) ??
-          (sleepDebt > 5 ? Math.round(Math.max(0, 100 - (sleepDebt - 5) * 3) * 10) / 10 : 100);
+        const vitality  = (profile.vitality as number) ?? vitalityFromSleepDebt(sleepDebt);
         const status = vitality >= 80 ? 'Peak Condition ✅'
           : vitality >= 60 ? 'Normal ✅'
           : vitality >= 30 ? 'Fatigued ⚠️'
@@ -101,11 +100,7 @@ router.get('/vitality-status', async (req: Request, res: Response) => {
     // Fallback: If no explicit flag, check for status keywords in Status
     let status = statusMatch ? statusMatch[1].trim() : '';
     if (!flag && status && /Peak Condition|Fatigued|Exhausted|Burnout/i.test(status)) flag = status;
-    // Dynamically calculate vitality from sleep debt using the formula:
-    // debt > 5 hrs: min(100, 100 - (debt - 5) * 3)  |  debt <= 5 hrs: 100
-    const calculatedVitality = sleepDebt > 5
-      ? Math.round(Math.min(100, 100 - (sleepDebt - 5) * 3) * 10) / 10
-      : 100;
+    const calculatedVitality = vitalityFromSleepDebt(sleepDebt);
     res.json({
       current: calculatedVitality,
       status: status,

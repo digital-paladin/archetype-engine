@@ -291,16 +291,16 @@ describe('CharacterParser — extractSleepDebt', () => {
     expect(data.sleepDebt.changeFromYesterday).toBe(-0.5);
   });
 
-  it('should set effectOnVitality using hard cap formula when debt > 5', async () => {
-    mockContent(SLEEP_DEBT_FIXTURE); // 12.23 hrs → 100 - (12.23-5)*3 ≈ 78.3
+  it('should set effectOnVitality using 3-segment curve when debt > 5', async () => {
+    mockContent(SLEEP_DEBT_FIXTURE); // 12.23 hrs → 94 − (12.23−5)×3 ≈ 72.3
     const data = await parser.parse();
     expect(data.sleepDebt.effectOnVitality).toBeLessThan(100);
   });
 
-  it('should return 100 effectOnVitality when debt ≤ 5', async () => {
+  it('should return 98 effectOnVitality at debt 3.00 (100 only at debt ≤ 2)', async () => {
     mockContent(`### Sleep Debt Counter\n**Current Debt:** 3.00 hours\n**Trend:** Stable`);
     const data = await parser.parse();
-    expect(data.sleepDebt.effectOnVitality).toBe(100);
+    expect(data.sleepDebt.effectOnVitality).toBe(98);
   });
 
   it('should default to 0 debt when section is missing', async () => {

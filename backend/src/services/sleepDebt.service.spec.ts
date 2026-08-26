@@ -31,9 +31,13 @@ describe('nightlyDeficit', () => {
 });
 
 describe('vitalityFromSleepDebt / trend', () => {
-  it('is 100 at debt <= 5 and decays 3 pts per extra hour', () => {
-    expect(vitalityFromSleepDebt(5)).toBe(100);
-    expect(vitalityFromSleepDebt(12.23)).toBeCloseTo(78.3, 1);
+  it('follows the 3-segment curve (100 ≤2h, −2/h to 5h, −3/h above 5h)', () => {
+    expect(vitalityFromSleepDebt(0)).toBe(100);
+    expect(vitalityFromSleepDebt(2)).toBe(100);
+    expect(vitalityFromSleepDebt(3.5)).toBe(97);
+    expect(vitalityFromSleepDebt(5)).toBe(94);
+    expect(vitalityFromSleepDebt(10)).toBe(79);
+    expect(vitalityFromSleepDebt(12.23)).toBeCloseTo(72.3, 1);
   });
 
   it('classifies trend with 0.05 hysteresis', () => {
@@ -109,7 +113,7 @@ describe('syncSleepDebtFromJournal', () => {
     expect(upsert).toHaveBeenCalledTimes(1);
     const patch = upsert.mock.calls[0][1];
     expect(patch.sleep_debt).toBe(3.2);
-    expect(patch.vitality).toBe(100);
+    expect(patch.vitality).toBe(97.6);
     expect(db.listJournalSleepRange).toHaveBeenCalledWith('user-1', '2026-07-19', '2026-08-17');
     expect(patch.sleep_extension_streak).toBe(0);
     expect(result?.extensionStreak).toBe(0);
