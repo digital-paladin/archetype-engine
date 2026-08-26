@@ -37,7 +37,7 @@ const SNAPSHOT_DIR = resolve(
   __dirname,
   // solo-leveling-journey sibling of archetype-engine (ProtonDrive path) OR local override
   process.env.MAY17_SNAPSHOT_DIR ||
-    'C:/Users/wraith-admin/ProtonDrive-wraith-admin-sync/IP-OWNERSHIP-INVENTORY/gitlab/solo-leveling-journey/character-progression/current-character-state-051726'
+    'C:/Users/wraith-admin/gitlab/solo-leveling-journey/character-progression/current-character-state-051726'
 );
 const CHAR_SHEET = resolve(SNAPSHOT_DIR, 'character-sheet.md');
 const JOURNAL    = resolve(SNAPSHOT_DIR, 'daily manual journal compendium(final version).md');

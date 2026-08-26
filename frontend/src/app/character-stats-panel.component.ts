@@ -1,6 +1,7 @@
 import { Component, OnInit, signal, computed, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
+import { finalize } from 'rxjs';
 import { environment } from '../environments/environment';
 
 interface SkillTreeStat {
@@ -537,24 +538,29 @@ export class CharacterStatsPanelComponent implements OnInit {
 
   // ── Lifecycle ────────────────────────────────────────────────────────────
   ngOnInit(): void {
-    this.http.get<CharStatsResponse>(`${environment.apiUrl}/api/character/stats`).subscribe({
+    this.http.get<CharStatsResponse>(`${environment.apiUrl}/api/character/stats`).pipe(
+      finalize(() => this.isLoading.set(false)),
+    ).subscribe({
       next: (data) => {
         this.stats.set(data);
         this.classes.set(data.skillTrees ?? []);
-        if (data.rpgStats) {
-          this.lifts.set([
-            { name: 'Squat',          value: data.rpgStats.squat.value,       target: data.rpgStats.squat.target       },
-            { name: 'Deadlift',       value: data.rpgStats.deadlift.value,    target: data.rpgStats.deadlift.target    },
-            { name: 'Bench Press',    value: data.rpgStats.benchPress.value,  target: data.rpgStats.benchPress.target  },
-            ...(data.rpgStats.overheadPress
-              ? [{ name: 'OH Press', value: data.rpgStats.overheadPress.value, target: data.rpgStats.overheadPress.target }]
-              : []),
-          ]);
-        }
-        this.isLoading.set(false);
+        this.lifts.set(this.liftsFromRpg(data.rpgStats));
       },
-      error: () => this.isLoading.set(false),
     });
+  }
+
+  /** Empty `{}` from the DB path is truthy — never read `.value` without a lift object. */
+  private liftsFromRpg(rpg?: CharStatsResponse['rpgStats']): { name: string; value: string; target?: string }[] {
+    if (!rpg) return [];
+    const rows: { name: string; value: string; target?: string }[] = [];
+    const add = (name: string, lift?: RpgLift) => {
+      if (lift?.value) rows.push({ name, value: lift.value, target: lift.target });
+    };
+    add('Squat', rpg.squat);
+    add('Deadlift', rpg.deadlift);
+    add('Bench Press', rpg.benchPress);
+    add('OH Press', rpg.overheadPress);
+    return rows;
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────────

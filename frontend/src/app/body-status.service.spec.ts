@@ -2,6 +2,9 @@
 // Unit tests for BodyStatusService — CRUD, auto-heal logic, XP penalty,
 // recovery calculations, getSummary, and localStorage persistence.
 
+import { TestBed } from '@angular/core/testing';
+import { provideHttpClient } from '@angular/common/http';
+import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { BodyStatusService } from './body-status.service';
 import { BodyStatus } from './body-status.interface';
 
@@ -9,9 +12,27 @@ const STORAGE_KEY = 'body-status';
 
 // ── Factory helpers ───────────────────────────────────────────────────────────
 
+function configureTestBed(): void {
+  TestBed.resetTestingModule();
+  TestBed.configureTestingModule({
+    providers: [
+      BodyStatusService,
+      provideHttpClient(),
+      provideHttpClientTesting(),
+    ],
+  });
+}
+
 function makeSvc(): BodyStatusService {
   localStorage.clear();
-  return new BodyStatusService();
+  configureTestBed();
+  return TestBed.inject(BodyStatusService);
+}
+
+/** New instance after localStorage was pre-seeded (survives re-creation tests). */
+function freshSvc(): BodyStatusService {
+  configureTestBed();
+  return TestBed.inject(BodyStatusService);
 }
 
 /** Add a status and return the service for chaining. */
@@ -175,7 +196,7 @@ describe('BodyStatusService — auto-heal / getActiveStatuses()', () => {
       color: '#ff9999',
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify([healedStatus]));
-    const svc2 = new BodyStatusService();
+    const svc2 = freshSvc();
     expect(svc2.getActiveStatuses()).toHaveLength(0);
   });
 });
@@ -208,7 +229,7 @@ describe('BodyStatusService — getStatusesByBodyPart()', () => {
       estimatedRecoveryDays: 2,
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify([healed]));
-    const svc2 = new BodyStatusService();
+    const svc2 = freshSvc();
     expect(svc2.getStatusesByBodyPart('left-knee')).toHaveLength(0);
   });
 });
@@ -378,7 +399,7 @@ describe('BodyStatusService — localStorage persistence', () => {
     addMinorInjury(svc1);
     const id = svc1.getActiveStatuses()[0].id;
 
-    const svc2 = new BodyStatusService();
+    const svc2 = freshSvc();
     const found = svc2.getActiveStatuses().find(s => s.id === id);
     expect(found).toBeDefined();
     expect(found!.name).toBe('Test Injury');
@@ -386,8 +407,8 @@ describe('BodyStatusService — localStorage persistence', () => {
 
   it('handles corrupted localStorage gracefully', () => {
     localStorage.setItem(STORAGE_KEY, '{{invalid json');
-    expect(() => new BodyStatusService()).not.toThrow();
-    const svc = new BodyStatusService();
+    expect(() => freshSvc()).not.toThrow();
+    const svc = freshSvc();
     expect(svc.getActiveStatuses()).toHaveLength(0);
   });
 

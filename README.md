@@ -335,8 +335,38 @@ Both scripts require `OWNER_EMAIL` set in `.env`.
 | Real-time | Socket.IO WebSocket |
 | File watching | Chokidar |
 | Auth | Supabase Auth + JWT middleware |
-| Testing | Jest (backend) · Karma/Jasmine (frontend) · Playwright (e2e) |
-| CI | GitHub Actions |
+| Testing | Jest (backend, 313 tests) · Vitest via `ng test` (frontend, 468 tests) · Playwright (e2e, ~25 tests) |
+| CI | GitHub Actions — all three suites on PR/push to `main` (`.github/workflows/ci.yml`) |
+
+### CI setup (GitHub Actions)
+
+Three parallel jobs run on every PR and push to `main`:
+
+| Job | Command | Notes |
+|-----|---------|-------|
+| **backend** | `npm test` in `backend/` | Jest — no secrets required |
+| **frontend-unit** | `npm run test:ci` in `frontend/` | Vitest via `ng test --no-watch` — no secrets |
+| **e2e** | `npm run e2e:ci` in `frontend/` | Playwright against live Vercel + Railway |
+
+**Required GitHub Actions secrets** (Settings → Secrets and variables → Actions):
+
+| Secret | Example |
+|--------|---------|
+| `PLAYWRIGHT_BASE_URL` | `https://your-app.vercel.app` |
+| `PLAYWRIGHT_API_URL` | `https://your-backend.up.railway.app` |
+| `PLAYWRIGHT_USERNAME` | Owner or dedicated e2e test account email |
+| `PLAYWRIGHT_PASSWORD` | Matching password |
+
+E2e hits production (or staging) — same vars as `frontend/e2e/.env.playwright`. The Playwright job **skips** (does not fail) until all four secrets are set, and on fork PRs (secrets unavailable). On failure, download the `playwright-report` artifact from the workflow run.
+
+Local equivalents:
+
+```bash
+cd backend && npm test
+cd frontend && npm run test:ci
+cd frontend && npm run e2e          # uses e2e/.env.playwright
+cd frontend && npm run e2e:headed   # visible browser
+```
 
 ---
 
