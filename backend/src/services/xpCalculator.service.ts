@@ -177,6 +177,13 @@ export class XpCalculatorService {
     { minDays:   1, multiplier: 1.05,  name: 'Novice' },
   ] as const;
 
+  // FLAGGED (not fixed — needs an explicit Owner decision on which curve is
+  // canonical before touching either): the frontend's LevelProgressionService
+  // (frontend/src/app/level-progression.service.ts, calculateXPForLevel) uses
+  // an entirely different formula — 100 × level^1.5 — for the SAME classes
+  // this service tracks server-side. Depending on which UI surface reads
+  // which source, a class's displayed level can visibly disagree with what
+  // this linear (836 × level) formula says character_stats actually holds.
   static readonly XP_PER_LEVEL_BASE = 836; // matches xpThresholdForLevel in character.routes.ts
   private static readonly ACL_ITEM_XP_BONUS = 0.5; // XP bonus per completed ACL item
 

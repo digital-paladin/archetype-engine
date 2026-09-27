@@ -75,6 +75,19 @@ router.post('/', async (req: Request, res: Response) => {
       : totalServerXp;
     const category = xpCalculator.getCategoryFromActivity(activityType);
 
+    // For single-class activities, if the client's authoritative XP differs from
+    // the server's flat config-based estimate (e.g. crafting recipes send a
+    // per-recipe xpReward that the activityXP config entry doesn't know about —
+    // confirmed cause of Survivalist "wilderness-craft" always persisting a flat
+    // 20 XP to character_stats regardless of what the UI displayed/logged), use
+    // the reconciled `rawXp` as that one award's baseline too, before any
+    // body-status penalty below. Multi-class activities keep the server's
+    // per-class breakdown since redistributing an arbitrary clientXp across
+    // several classes isn't well-defined.
+    const reconciledXpAwards = (xpAwards.length === 1 && rawXp !== totalServerXp)
+      ? [{ class: xpAwards[0].class, xp: rawXp }]
+      : xpAwards;
+
     // ── Body-status XP penalty (previously dead code — BodyStatusService.getXPPenaltyForAction()
     // was unit-tested but never wired into a real activity-logging path). Take the max active
     // xp_penalty among statuses whose impacts_actions includes this activityType — highest wins,
@@ -96,9 +109,10 @@ router.post('/', async (req: Request, res: Response) => {
     }
     const penaltyMultiplier = (100 - xpPenaltyPct) / 100;
     const xp = Math.round(rawXp * penaltyMultiplier);
-    // Same multiplier applied per-class so the response and the per-class Supabase writes below
-    // (character_stats) stay reconciled with the top-level `xp` the client sees.
-    const finalXpAwards = xpAwards.map(a => ({ ...a, xp: Math.round(a.xp * penaltyMultiplier) }));
+    // Same multiplier applied on top of the client/server reconciliation above, so the
+    // response and the per-class Supabase writes below (character_stats) both stay
+    // reconciled with the top-level `xp` the client sees.
+    const finalXpAwards = reconciledXpAwards.map(a => ({ ...a, xp: Math.round(a.xp * penaltyMultiplier) }));
     if (xpPenaltyPct > 0) {
       console.log(`[ACTIVITY] Body-status XP penalty applied: -${xpPenaltyPct}% (${rawXp} → ${xp})`);
     }
@@ -162,8 +176,22 @@ router.post('/', async (req: Request, res: Response) => {
             }
           }
         } catch (dbErr) {
-          console.warn('[ACTIVITY] Supabase write failed (non-blocking):',
-            dbErr instanceof Error ? dbErr.message : dbErr);
+          // Upgraded from console.warn: this write happens after the HTTP response
+          // has already been sent, so a swallowed failure here is otherwise
+          // completely invisible — the user sees "+N XP" in the UI while
+          // character_stats silently never receives it. Log loudly with full
+          // context and notify any connected client so the discrepancy is at
+          // least observable in real time instead of only discoverable by
+          // noticing a class is stuck at a level it should have passed.
+          const errMsg = dbErr instanceof Error ? dbErr.message : String(dbErr);
+          console.error(
+            `[ACTIVITY] ❌ Supabase write FAILED for user=${userId} activityType=${activityType} ` +
+            `xp=${xp} awards=${JSON.stringify(finalXpAwards)} — character_stats NOT updated:`,
+            errMsg,
+          );
+          if (io) {
+            io.emit('activity-write-failed', { activityType, xp, awards: finalXpAwards, error: errMsg });
+          }
         }
       });
     }
