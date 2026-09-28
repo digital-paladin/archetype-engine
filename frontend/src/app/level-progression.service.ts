@@ -6,6 +6,13 @@ import { BehaviorSubject, Observable } from 'rxjs';
  * Implements Archetype Engine multi-class leveling system
  * Formula: XP_to_level = 100 × (level^1.5)
  * Based on character-sheet.md level progression formulas
+ *
+ * FLAGGED (not fixed — needs an explicit Owner decision on which curve is
+ * canonical before touching either): the backend's XpCalculatorService
+ * (backend/src/services/xpCalculator.service.ts, applyXPGain) uses a
+ * different, LINEAR formula for the same classes — max(100, 836 × level).
+ * Whichever surface in this app reads from this service vs. the backend's
+ * character_stats can show a visibly different level for the same class.
  */
 
 export interface SkillClass {

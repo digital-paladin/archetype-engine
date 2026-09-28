@@ -156,4 +156,35 @@ describe('POST /api/activities — body-status XP penalty', () => {
     expect(res.status).toBe(200);
     expect(res.body.xp).toBe(100);
   });
+
+  // Regression coverage for combining the single-class client/server XP
+  // reconciliation (client's authoritative xp overriding a stale server
+  // config-based estimate — the Survivalist "wilderness-craft" fix) with the
+  // body-status penalty multiplier. The reconciled award must be the
+  // baseline the penalty is applied ON TOP OF, not bypassed by it.
+  it('applies the body-status penalty on top of the single-class client/server XP reconciliation', async () => {
+    mockGetActiveBodyStatuses.mockResolvedValue([
+      { id: 'a', body_part: 'left-hand', type: 'injury', severity: 'moderate', name: 'Sprained wrist',
+        start_date: new Date().toISOString(), impacts_actions: ['wilderness-craft'], xp_penalty: 25 },
+    ]);
+
+    // 'wilderness-craft' is not in the server's activityXP config, so
+    // xpCalculator falls back to a flat single-class [{ class, xp: 10 }]
+    // award (totalServerXp = 10) — the client's clientXp: 60 (from a
+    // per-recipe xpReward) diverges from that, triggering reconciliation.
+    const res = await request(makeApp())
+      .post('/api/activities')
+      .send({ activityType: 'wilderness-craft', xp: 60 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.xp).toBe(45); // reconciled to 60, then -25% body-status penalty
+    expect(res.body.xpPenaltyPct).toBe(25);
+    expect(res.body.xpAwards).toHaveLength(1);
+    expect(res.body.xpAwards[0].xp).toBe(45); // per-class award matches the top-level xp exactly
+
+    await flushAsync();
+
+    const persistedTotalXp = mockUpsertCharacterStats.mock.calls[0][1].total_xp;
+    expect(persistedTotalXp).toBe(45);
+  });
 });
