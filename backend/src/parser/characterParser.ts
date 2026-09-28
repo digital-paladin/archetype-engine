@@ -1,6 +1,7 @@
 import { readFile } from 'fs/promises';
 import { CharacterData, SkillTree, VitalityData, PhaseInfo, Title, LockedTitle, TitleCollection, TitleRarity, RecoveryFactor, SleepDebtData, AcmMetrics, RpgStats, RpgLift, OverallLevelInfo, QuestLine, QuestChapter, GrandConvergence, GrandConvergenceCondition } from '../models/character.model';
 import { calculateOverallLevelInfo } from '../utils/overallLevel';
+import { vitalityFromSleepDebt } from '../services/sleepDebt.service';
 
 export class CharacterParser {
   constructor(private filePath: string) {}
@@ -115,8 +116,8 @@ export class CharacterParser {
     const targetDate = progressMatch ? new Date(progressMatch[4].trim()) : undefined;
     const onTrackForTarget = currentDebt > 0 && trend === 'decreasing';
     
-    // Effect on vitality (hard cap formula)
-    const effectOnVitality = currentDebt > 5 ? Math.round((100 - (currentDebt - 5) * 3) * 10) / 10 : 100;
+    // Effect on vitality (3-segment curve: 100 ≤2h, −2/h to 5h, −3/h above 5h)
+    const effectOnVitality = vitalityFromSleepDebt(currentDebt);
     
     // Effect on consolidation (estimate based on debt level)
     const effectOnConsolidation = currentDebt > 10 ? 85 : currentDebt > 5 ? 90 : 95;

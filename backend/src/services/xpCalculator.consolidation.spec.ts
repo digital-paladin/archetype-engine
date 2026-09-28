@@ -98,6 +98,22 @@ describe('XpCalculatorService — consolidation formulas', () => {
       // 1.15 × 0.90 → 100 * 1.15 * 0.9 = 103.499... (float) → Math.round = 103
       expect(result.confirmed).toBe(103);
     });
+
+    it('sleep-extension modifier stacks on top of streak × fitbit', () => {
+      // Grandmaster 1.15 × Fitbit 1.0 × extension 1.10 (9.5h, no streak)
+      // 1.15 × 1.10 = 1.265 → 126% (float), confirmed = 100 × 1.26
+      const result = calc.calculateConfirmedXP(100, 365, 100, 9.5, 0);
+      expect(calc.getSleepExtensionModifier(9.5, 0)).toBeCloseTo(1.10);
+      expect(result.consolidationPct).toBe(126);
+      expect(result.confirmed).toBe(126);
+    });
+
+    it('omitted sleep hours leave confirmed XP unchanged vs the 3-arg form', () => {
+      const base = calc.calculateConfirmedXP(100, 690, 91);
+      const same = calc.calculateConfirmedXP(100, 690, 91, undefined, undefined);
+      expect(same.confirmed).toBe(base.confirmed);
+      expect(calc.getSleepExtensionModifier()).toBe(1);
+    });
   });
 
   // ── applyXPGain ───────────────────────────────────────────────────────────

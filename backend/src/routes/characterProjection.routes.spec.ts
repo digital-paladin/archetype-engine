@@ -64,9 +64,8 @@ describe('XP Projection API', () => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// Vitality Status — Dynamic Formula
-// Formula: debt > 5hrs → min(100, 100 - (debt - 5) × 3)
-//          debt ≤ 5hrs → 100
+// Vitality Status — Dynamic Formula (3-segment curve)
+// debt ≤ 2 → 100; 2 < debt ≤ 5 → 100 − (debt−2)×2; debt > 5 → max(10, 94−(debt−5)×1.5)
 // ─────────────────────────────────────────────────────────────
 describe('GET /api/vitality-status — dynamic vitality calculation', () => {
   function setupFixture(sleepDebt: number | null, status = 'Normal ✅') {
@@ -85,26 +84,26 @@ ${debtLine}
     (fs.readFileSync as jest.Mock).mockReset();
   });
 
-  it('calculates vitality dynamically from debt > 5 hrs (formula: 100 - (debt-5)×3)', async () => {
+  it('calculates vitality dynamically from debt > 5 hrs (3-segment curve)', async () => {
     setupFixture(12.23);
     const response = await request(app).get('/api/vitality-status');
     expect(response.status).toBe(200);
-    // 100 - (12.23 - 5) × 3 = 100 - 21.69 = 78.31 → rounds to 78.3
-    expect(response.body.current).toBeCloseTo(78.3, 1);
+    // 94 − (12.23 − 5) × 1.5 = 83.155 → rounds to 83.2
+    expect(response.body.current).toBeCloseTo(83.2, 1);
   });
 
-  it('returns 100 when sleep debt is ≤ 5 hrs', async () => {
+  it('returns 97 when sleep debt is 3.5 hrs (middle segment)', async () => {
     setupFixture(3.5);
     const response = await request(app).get('/api/vitality-status');
     expect(response.status).toBe(200);
-    expect(response.body.current).toBe(100);
+    expect(response.body.current).toBe(97);
   });
 
-  it('returns 100 when sleep debt is exactly 5 hrs', async () => {
+  it('returns 94 when sleep debt is exactly 5 hrs', async () => {
     setupFixture(5.0);
     const response = await request(app).get('/api/vitality-status');
     expect(response.status).toBe(200);
-    expect(response.body.current).toBe(100);
+    expect(response.body.current).toBe(94);
   });
 
   it('caps vitality at 100 (formula can never exceed 100)', async () => {

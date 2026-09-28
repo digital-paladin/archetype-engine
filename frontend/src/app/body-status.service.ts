@@ -4,6 +4,21 @@ import { HttpClient } from '@angular/common/http';
 import { BodyStatus, BodyPart, StatusType, Severity } from './body-status.interface';
 import { environment } from '../environments/environment';
 
+/** Raw shape returned by GET/POST /api/body-status (snake_case DB row). */
+interface BodyStatusRow {
+  id: string;
+  body_part: string;
+  type: string;
+  severity: string;
+  name: string;
+  description?: string;
+  start_date: string;
+  estimated_recovery_days?: number;
+  notes?: string;
+  impacts_actions?: string[];
+  xp_penalty?: number;
+}
+
 @Injectable({
   providedIn: 'root'
 })
@@ -13,6 +28,10 @@ export class BodyStatusService {
 
   constructor() {
     this.loadFromStorage();
+    // Backend is now source of truth — refresh immediately on top of the
+    // localStorage cache so the UI paints instantly, then updates when the
+    // network response lands.
+    this.syncFromJournal();
   }
 
   getStatuses(): Observable<BodyStatus[]> {
@@ -53,11 +72,31 @@ export class BodyStatusService {
       xpPenalty
     };
 
+    const localId = status.id;
     const currentStatuses = this.statuses$.value;
     this.statuses$.next([status, ...currentStatuses]);
     this.saveToStorage();
 
     console.log(`[BodyStatus] Added: ${name} (${bodyPart}, ${severity})`);
+
+    // Best-effort backend persistence — UI already updated optimistically above.
+    this.http.post<{ success: boolean; status: BodyStatusRow }>(
+      `${environment.apiUrl}/api/body-status`,
+      {
+        bodyPart, type, severity, name, description,
+        startDate: status.startDate.toISOString(),
+        estimatedRecoveryDays, notes, impactsActions, xpPenalty,
+      },
+    ).subscribe({
+      // Swap the client-generated id for the server-assigned one so later
+      // updateStatus()/removeStatus() calls actually target the real row.
+      next: (res) => {
+        if (res.success && res.status?.id) {
+          this.replaceLocalId(localId, res.status.id);
+        }
+      },
+      error: (err) => console.warn('[BodyStatus] Backend add failed (kept local-only):', err),
+    });
   }
 
   updateStatus(id: string, updates: Partial<BodyStatus>): void {
@@ -70,6 +109,20 @@ export class BodyStatusService {
     this.saveToStorage();
 
     console.log(`[BodyStatus] Updated: ${id}`);
+
+    this.http.patch(`${environment.apiUrl}/api/body-status/${id}`, {
+      bodyPart: updates.bodyPart,
+      type: updates.type,
+      severity: updates.severity,
+      name: updates.name,
+      description: updates.description,
+      estimatedRecoveryDays: updates.estimatedRecoveryDays,
+      notes: updates.notes,
+      impactsActions: updates.impactsActions,
+      xpPenalty: updates.xpPenalty,
+    }).subscribe({
+      error: (err) => console.warn('[BodyStatus] Backend update failed (kept local-only):', err),
+    });
   }
 
   removeStatus(id: string): void {
@@ -80,6 +133,10 @@ export class BodyStatusService {
     this.saveToStorage();
 
     console.log(`[BodyStatus] Removed: ${id}`);
+
+    this.http.delete(`${environment.apiUrl}/api/body-status/${id}`).subscribe({
+      error: (err) => console.warn('[BodyStatus] Backend remove failed (kept local-only):', err),
+    });
   }
 
   markHealed(id: string): void {
@@ -143,7 +200,7 @@ export class BodyStatusService {
     return Array.from(actions);
   }
 
-  private getColorForStatus(type: StatusType, severity: Severity): string {
+  getColorForStatus(type: StatusType, severity: Severity): string {
     const colors = {
       injury: {
         minor: '#ff9999',      // Light red
@@ -170,6 +227,18 @@ export class BodyStatusService {
 
   private generateId(): string {
     return `status-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  }
+
+  /** Client-generated ids (see generateId) vs. server-assigned UUIDs from body_status. */
+  private isLocalOnlyId(id: string): boolean {
+    return id.startsWith('status-');
+  }
+
+  /** Swaps a client-generated temp id for the real server-assigned UUID once the POST resolves. */
+  private replaceLocalId(oldId: string, newId: string): void {
+    const statuses = this.statuses$.value.map(s => (s.id === oldId ? { ...s, id: newId } : s));
+    this.statuses$.next(statuses);
+    this.saveToStorage();
   }
 
   private saveToStorage(): void {
@@ -212,39 +281,42 @@ export class BodyStatusService {
   }
 
   /**
-   * Fetch active injuries from the journal API and populate the body diagram.
-   * Journal is the source of truth — replaces any existing journal-synced entries.
-   * Manually-added entries (id not prefixed 'journal-') are preserved.
+   * Refreshes all body-status entries from the backend (source of truth —
+   * Supabase-backed `body_status` table, replacing the old
+   * GET /api/character/injuries stub that always returned []). Called on
+   * service init and can be called again to force a manual refresh.
+   * localStorage remains a read-through cache for instant paint / offline use.
    */
   syncFromJournal(): void {
-    this.http.get<{ success: boolean; injuries: any[] }>(`${environment.apiUrl}/api/character/injuries`)
+    this.http.get<{ success: boolean; statuses: BodyStatusRow[] }>(`${environment.apiUrl}/api/body-status`)
       .subscribe({
         next: (res) => {
-          if (!res.success || !res.injuries) return;
+          if (!res.success || !res.statuses) return;
 
-          // Keep manually-added statuses (those not prefixed with 'journal-')
-          const manual = this.statuses$.value.filter(s => !s.id.startsWith('journal-'));
-
-          const journalStatuses: BodyStatus[] = res.injuries.map((inj: any) => ({
-            id: inj.id,
-            bodyPart: inj.bodyPart as BodyPart,
-            type: 'injury' as StatusType,
-            severity: inj.severity as Severity,
-            name: inj.name,
-            description: inj.description,
-            startDate: new Date(inj.onsetDate),
-            estimatedRecoveryDays: inj.estimatedRecoveryDays,
-            notes: inj.notes,
-            color: this.getColorForStatus('injury', inj.severity as Severity),
-            impactsActions: inj.impactsActions ?? [],
-            xpPenalty: inj.xpPenalty ?? 0
+          const statuses: BodyStatus[] = res.statuses.map((row) => ({
+            id: row.id,
+            bodyPart: row.body_part as BodyPart,
+            type: row.type as StatusType,
+            severity: row.severity as Severity,
+            name: row.name,
+            description: row.description ?? '',
+            startDate: new Date(row.start_date),
+            estimatedRecoveryDays: row.estimated_recovery_days ?? undefined,
+            notes: row.notes ?? undefined,
+            color: this.getColorForStatus(row.type as StatusType, row.severity as Severity),
+            impactsActions: row.impacts_actions ?? [],
+            xpPenalty: row.xp_penalty ?? 0,
           }));
 
-          this.statuses$.next([...journalStatuses, ...manual]);
+          // Preserve any status that never made it to the backend yet (e.g. added
+          // while offline — still carries a client-generated 'status-…' id rather
+          // than a server UUID) instead of silently dropping it on refresh.
+          const unsynced = this.statuses$.value.filter(s => this.isLocalOnlyId(s.id));
+          this.statuses$.next([...statuses, ...unsynced]);
           this.saveToStorage();
-          console.log(`[BodyStatus] Synced ${journalStatuses.length} injuries from journal`);
+          console.log(`[BodyStatus] Synced ${statuses.length} statuses from backend (${unsynced.length} pending local-only)`);
         },
-        error: (err) => { console.warn('[BodyStatus] Journal sync failed:', err); }
+        error: (err) => { console.warn('[BodyStatus] Backend sync failed (kept local cache):', err); }
       });
   }
 }

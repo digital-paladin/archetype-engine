@@ -115,6 +115,7 @@ export async function provisionNewUser(params: {
   await db.upsertCharacterProfile(userId, {
     vitality: 100,
     sleep_debt: 0,
+    sleep_extension_streak: 0,
     sage_streak: 0,
     phase: 'foundation',
     acm_metrics: {},

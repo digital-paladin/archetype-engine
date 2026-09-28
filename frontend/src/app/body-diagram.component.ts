@@ -438,6 +438,8 @@ type SeverityRank = 'minor' | 'moderate' | 'severe' | 'critical';
 })
 export class BodyDiagramComponent implements OnInit, OnDestroy {
   @Input() characterLevel = 20;
+  /** Set by the dashboard when a 3D-model body-status marker was clicked — pre-opens that status's detail. */
+  @Input() preSelectedStatusId: string | null = null;
 
   activeStatuses: BodyStatus[] = [];
   selectedStatus: BodyStatus | null = null;
@@ -505,6 +507,11 @@ export class BodyDiagramComponent implements OnInit, OnDestroy {
     this.subscription = this.bodyStatusService.getStatuses().subscribe(statuses => {
       this.activeStatuses = this.bodyStatusService.getActiveStatuses();
       this.summary = this.bodyStatusService.getSummary();
+
+      if (this.preSelectedStatusId) {
+        const match = this.activeStatuses.find(s => s.id === this.preSelectedStatusId);
+        if (match) this.selectStatus(match);
+      }
     });
 
     // Sync injuries from journal (source of truth) on every open

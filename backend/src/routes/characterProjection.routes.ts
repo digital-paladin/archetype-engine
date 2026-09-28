@@ -7,7 +7,7 @@ import * as path from 'path';
 import { XPProjectionService, XPProjection } from '../services/xpProjection.service';
 import { getSupabaseAdmin } from '../lib/supabase';
 import { getDataService } from '../services/data/dataService';
-import { syncSleepDebtFromJournalSafe } from '../services/sleepDebt.service';
+import { syncSleepDebtFromJournal, vitalityFromSleepDebt } from '../services/sleepDebt.service';
 
 const router = Router();
 
@@ -20,13 +20,12 @@ router.get('/vitality-status', async (req: Request, res: Response) => {
     // DB-first: character_profile (sleep debt catch-up from journal nights)
     const userId = (req as any).userId as string | undefined;
     if (userId) {
-      await syncSleepDebtFromJournalSafe(userId);
+      const sync = await syncSleepDebtFromJournal(userId).catch(() => null);
       const db = getDataService();
       const profile = await db.getCharacterProfile(userId).catch(() => null);
       if (profile?.sleep_debt !== undefined) {
         const sleepDebt = profile.sleep_debt as number;
-        const vitality  = (profile.vitality as number) ??
-          (sleepDebt > 5 ? Math.round(Math.max(0, 100 - (sleepDebt - 5) * 3) * 10) / 10 : 100);
+        const vitality  = (profile.vitality as number) ?? vitalityFromSleepDebt(sleepDebt);
         const status = vitality >= 80 ? 'Peak Condition ✅'
           : vitality >= 60 ? 'Normal ✅'
           : vitality >= 30 ? 'Fatigued ⚠️'
@@ -37,7 +36,9 @@ router.get('/vitality-status', async (req: Request, res: Response) => {
           status,
           sleepDebt,
           trend:     profile.sleep_trend ?? 'Stable',
-          flag:      '',
+          flag:      vitality < 60 ? 'Sleep Deprived ⚠️' : '',
+          sleepExtensionStreak: sync?.extensionStreak ?? profile.sleep_extension_streak ?? 0,
+          sleepExtensionBonusPct: sync?.extensionBonusPct ?? 0,
         });
       }
     }
@@ -99,17 +100,15 @@ router.get('/vitality-status', async (req: Request, res: Response) => {
     // Fallback: If no explicit flag, check for status keywords in Status
     let status = statusMatch ? statusMatch[1].trim() : '';
     if (!flag && status && /Peak Condition|Fatigued|Exhausted|Burnout/i.test(status)) flag = status;
-    // Dynamically calculate vitality from sleep debt using the formula:
-    // debt > 5 hrs: min(100, 100 - (debt - 5) * 3)  |  debt <= 5 hrs: 100
-    const calculatedVitality = sleepDebt > 5
-      ? Math.round(Math.min(100, 100 - (sleepDebt - 5) * 3) * 10) / 10
-      : 100;
+    const calculatedVitality = vitalityFromSleepDebt(sleepDebt);
     res.json({
       current: calculatedVitality,
       status: status,
       sleepDebt: sleepDebt,
       trend: trendMatch ? trendMatch[1].trim() : '',
-      flag
+      flag,
+      sleepExtensionStreak: 0,
+      sleepExtensionBonusPct: 0,
     });
   } catch (err) {
     // File read failed — fall back to the most recent Fitbit score from Supabase.

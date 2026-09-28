@@ -1,6 +1,7 @@
 import { Injectable } from '@angular/core';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { BodyPart } from './body-status.interface';
 
 export interface ActivityAnimation {
   type: 'prayer' | 'workout' | 'coding' | 'redteam' | 'artist' | 'fasting' | 'hydration' | 'protein' | 'levelup';
@@ -8,6 +9,51 @@ export interface ActivityAnimation {
   xpGain: number;
   loop: boolean;
 }
+
+export interface BodyPartBoneAnchor {
+  /** Bare Mixamo bone name (e.g. 'Head', 'LeftForeArm') — resolveBone() tries both bare and 'mixamorig'-prefixed forms. */
+  bone: string;
+  /** When set, anchor is the midpoint between `bone` and this bone (approximates a limb segment, not just a joint). */
+  secondaryBone?: string;
+  anchor: 'joint' | 'midpointToParent';
+}
+
+/**
+ * Maps every BodyPart zone to a real skeleton bone (or bone pair) so the
+ * character panel can point a marker at it in 3D space, instead of only the
+ * flat 2D SVG diagram. back-upper/back-lower have no dedicated spine-facing
+ * bone in the standard Mixamo rig, so they approximate off the nearest spine
+ * bone — comparable precision to the flat diagram, which is itself only an
+ * approximate zone map.
+ */
+export const BODY_PART_BONE_MAP: Record<BodyPart, BodyPartBoneAnchor> = {
+  head:             { bone: 'Head',        anchor: 'joint' },
+  neck:             { bone: 'Neck',        anchor: 'joint' },
+  chest:            { bone: 'Spine2',      anchor: 'joint' },
+  abdomen:          { bone: 'Spine1',      anchor: 'joint' },
+  'left-shoulder':  { bone: 'LeftShoulder',  anchor: 'joint' },
+  'right-shoulder': { bone: 'RightShoulder', anchor: 'joint' },
+  'left-upper-arm': { bone: 'LeftArm',        secondaryBone: 'LeftForeArm', anchor: 'midpointToParent' },
+  'right-upper-arm':{ bone: 'RightArm',       secondaryBone: 'RightForeArm', anchor: 'midpointToParent' },
+  'left-forearm':   { bone: 'LeftForeArm',    secondaryBone: 'LeftHand',    anchor: 'midpointToParent' },
+  'right-forearm':  { bone: 'RightForeArm',   secondaryBone: 'RightHand',   anchor: 'midpointToParent' },
+  'left-hand':      { bone: 'LeftHand',       anchor: 'joint' },
+  'right-hand':     { bone: 'RightHand',      anchor: 'joint' },
+  'left-hip':       { bone: 'LeftUpLeg',      anchor: 'joint' },
+  'right-hip':      { bone: 'RightUpLeg',     anchor: 'joint' },
+  'left-thigh':     { bone: 'LeftUpLeg',      secondaryBone: 'LeftLeg',  anchor: 'midpointToParent' },
+  'right-thigh':    { bone: 'RightUpLeg',     secondaryBone: 'RightLeg', anchor: 'midpointToParent' },
+  'left-knee':      { bone: 'LeftLeg',        anchor: 'joint' },
+  'right-knee':     { bone: 'RightLeg',       anchor: 'joint' },
+  'left-calf':      { bone: 'LeftLeg',        secondaryBone: 'LeftFoot',  anchor: 'midpointToParent' },
+  'right-calf':     { bone: 'RightLeg',       secondaryBone: 'RightFoot', anchor: 'midpointToParent' },
+  'left-ankle':     { bone: 'LeftFoot',       anchor: 'joint' },
+  'right-ankle':    { bone: 'RightFoot',      anchor: 'joint' },
+  'left-foot':      { bone: 'LeftToeBase',    anchor: 'joint' },
+  'right-foot':     { bone: 'RightToeBase',   anchor: 'joint' },
+  'back-upper':     { bone: 'Spine2',         anchor: 'joint' }, // approximate — no dedicated back-facing bone
+  'back-lower':     { bone: 'Spine',          anchor: 'joint' }, // approximate
+};
 
 @Injectable({
   providedIn: 'root'
@@ -22,8 +68,19 @@ export class ThreeCharacterService {
   private currentAnimation: THREE.AnimationAction | null = null;
   private clock = new THREE.Clock();
   private animationFrameId: number | null = null;
+  private frameCallbacks: Array<() => void> = [];
 
   constructor() {}
+
+  /** Registers a callback invoked once per render-loop tick (after the frame is drawn). */
+  onFrame(cb: () => void): void {
+    this.frameCallbacks.push(cb);
+  }
+
+  /** Unregisters a callback previously passed to onFrame(). */
+  offFrame(cb: () => void): void {
+    this.frameCallbacks = this.frameCallbacks.filter(c => c !== cb);
+  }
 
   initScene(canvas: HTMLCanvasElement): void {
     // Scene setup
@@ -609,6 +666,63 @@ export class ThreeCharacterService {
     }
 
     this.renderer.render(this.scene, this.camera);
+    this.frameCallbacks.forEach(cb => cb());
+  }
+
+  /**
+   * Resolves a bone by name, tolerating either bare ('Head') or Mixamo-prefixed
+   * ('mixamorigHead') skeleton naming — mirrors the bare/prefixed cases already
+   * handled by remapMixamoBoneNames() for animation tracks.
+   */
+  private resolveBone(name: string): THREE.Object3D | null {
+    if (!this.character) return null;
+    let obj = this.character.getObjectByName(name);
+    if (obj) return obj;
+    obj = this.character.getObjectByName('mixamorig' + name);
+    if (obj) return obj;
+    if (name.startsWith('mixamorig')) {
+      obj = this.character.getObjectByName(name.slice(9));
+      if (obj) return obj;
+    }
+    return null;
+  }
+
+  /**
+   * Projects a bone's (or the midpoint between two bones') current world position
+   * through the active camera into 0-100% screen-space coordinates, matching the
+   * [style.left.%]/[style.top.%] convention already used for "Floating XP Text".
+   * Returns null if the bone can't be resolved or falls outside the camera's view.
+   */
+  getBoneScreenPosition(boneName: string, secondaryBoneName?: string): { xPct: number; yPct: number } | null {
+    const bone = this.resolveBone(boneName);
+    if (!bone || !this.camera) return null;
+
+    const pos = new THREE.Vector3();
+    bone.getWorldPosition(pos);
+
+    if (secondaryBoneName) {
+      const secondBone = this.resolveBone(secondaryBoneName);
+      if (secondBone) {
+        const pos2 = new THREE.Vector3();
+        secondBone.getWorldPosition(pos2);
+        pos.lerp(pos2, 0.5);
+      }
+    }
+
+    const ndc = pos.clone().project(this.camera);
+    if (ndc.z > 1 || ndc.z < -1) return null; // outside near/far camera range
+
+    return {
+      xPct: (ndc.x + 1) / 2 * 100,
+      yPct: (1 - ndc.y) / 2 * 100, // NDC +y is up; CSS top.% grows downward
+    };
+  }
+
+  /** Convenience wrapper — looks up the bone(s) for a BodyPart via BODY_PART_BONE_MAP. */
+  getBodyPartScreenPosition(bodyPart: BodyPart): { xPct: number; yPct: number } | null {
+    const mapping = BODY_PART_BONE_MAP[bodyPart];
+    if (!mapping) return null;
+    return this.getBoneScreenPosition(mapping.bone, mapping.secondaryBone);
   }
 
   onWindowResize(width: number, height: number): void {
@@ -621,6 +735,7 @@ export class ThreeCharacterService {
     if (this.animationFrameId !== null) {
       cancelAnimationFrame(this.animationFrameId);
     }
+    this.frameCallbacks = [];
     this.renderer.dispose();
     this.scene.clear();
     console.log('[Three.js] Service disposed');
