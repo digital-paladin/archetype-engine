@@ -389,6 +389,13 @@ export class ThreeCharacterService {
     
     if (!action) {
       console.warn(`[Three.js] Animation "${name}" not found. Available:`, Array.from(this.animations.keys()));
+      // Fall back to a looping idle instead of leaving the character with no
+      // active animation (which shows the raw bind pose / T-pose). Guard
+      // against recursing forever if idle itself is somehow unavailable.
+      const isAlreadyIdleRequest = idleAliases.has(name) || name.toLowerCase() === 'idle';
+      if (!isAlreadyIdleRequest) {
+        this.playAnimation('idle', true);
+      }
       return;
     }
 

@@ -301,6 +301,7 @@ export class CharacterDisplayComponent implements OnInit, AfterViewInit, OnDestr
   private textIdCounter = 0;
   private modelLoaded = false;
   private currentAnimation: string | null = null;
+  private pendingAnimation: { name: string; loop: boolean } | null = null;
   private resizeObserver!: ResizeObserver;
   private boundHandleXPText!: EventListener;
   private boundHandlePlayAnimation!: EventListener;
@@ -346,7 +347,17 @@ export class CharacterDisplayComponent implements OnInit, AfterViewInit, OnDestr
       this.threeService.loadCharacter(path).then(() => {
         this.modelLoaded = true;
         this.threeService.animate();
-        this.threeService.playAnimation('idle', true); // ensure idle on every model load
+        // Replay whatever animation was requested (e.g. by clicking the ACM
+        // tab) while the model was still loading, instead of dropping it and
+        // leaving the character on a mismatched/default animation.
+        if (this.pendingAnimation) {
+          const { name, loop } = this.pendingAnimation;
+          this.pendingAnimation = null;
+          this.threeService.playAnimation(name, loop);
+          if (loop) this.currentAnimation = name;
+        } else {
+          this.threeService.playAnimation('idle', true); // ensure idle on every model load
+        }
 
         // Recompute body-status marker screen positions every render-loop tick —
         // the character moves (animation, resize, camera fx) so a fixed % would drift.
@@ -407,8 +418,13 @@ export class CharacterDisplayComponent implements OnInit, AfterViewInit, OnDestr
   }
 
   private handlePlayAnimation(event: Event): void {
-    if (!this.modelLoaded) return;
     const { name, loop } = (event as CustomEvent).detail;
+    if (!this.modelLoaded) {
+      // Remember the most recent request instead of dropping it — it gets
+      // replayed as soon as the model finishes loading (see loadModel above).
+      this.pendingAnimation = { name, loop: loop ?? false };
+      return;
+    }
     this.threeService.playAnimation(name, loop ?? false);
     if (loop) this.currentAnimation = name;
   }
