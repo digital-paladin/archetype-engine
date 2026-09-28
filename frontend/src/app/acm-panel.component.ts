@@ -30,6 +30,20 @@ interface AbstinenceStreakView {
   amcc_tooltip: string;
   resistance_events: Array<{ date: string; note: string }>;
   break_log: unknown[];
+  scheduled_breaks: ScheduledBreakView[];
+}
+
+/** Phase 3 — Disciplined Indulgence scheduling: pre-declared break, reconciled after the fact. */
+interface ScheduledBreakView {
+  id: string;
+  scheduled_date: string;
+  estimated_type: string;
+  estimated_count: number;
+  notes?: string;
+  resolved: boolean;
+  actual_type?: string;
+  actual_count?: number;
+  resolved_at?: string;
 }
 
 interface BreakModalState {
@@ -176,6 +190,45 @@ const STAT_META = [
                       [disabled]="isUpdating()"
                       (click)="submitResistance(s.item_index)">
                       + Log a resistance win
+                    </button>
+                  </div>
+                </div>
+
+                <!-- ── Disciplined Indulgence scheduling (Phase 3) ── -->
+                <button type="button" class="abs-toggle-log" (click)="toggleScheduleOpen(s.item_index)">
+                  {{ scheduleOpen().has(s.item_index) ? '▼' : '▶' }}
+                  {{ upcomingSchedules(s).length }} planned indulgence{{ upcomingSchedules(s).length === 1 ? '' : 's' }}
+                </button>
+                <div class="abs-schedule" *ngIf="scheduleOpen().has(s.item_index)">
+                  <div class="abs-sched-item" *ngFor="let sc of upcomingSchedules(s)">
+                    <div class="abs-sched-head">
+                      <span class="abs-sched-date">{{ sc.scheduled_date }}</span>
+                      <span class="abs-sched-est">planned: {{ sc.estimated_count }}× {{ sc.estimated_type }}</span>
+                    </div>
+                    <div class="abs-sched-resolve" *ngIf="isViewingToday">
+                      <input type="text" class="abs-sched-input" [attr.data-actual-type-for]="sc.id"
+                             [value]="sc.estimated_type" placeholder="actual type" />
+                      <input type="number" min="0" class="abs-sched-input abs-sched-input-num"
+                             [attr.data-actual-count-for]="sc.id" [value]="sc.estimated_count" placeholder="actual #" />
+                      <button type="button" class="abs-sched-resolve-btn" [disabled]="isUpdating()"
+                              (click)="resolveSchedule(s.item_index, sc.id)">
+                        Resolve
+                      </button>
+                    </div>
+                  </div>
+                  <div class="abs-sched-resolved" *ngFor="let sc of resolvedSchedules(s)">
+                    <span class="abs-sched-date">{{ sc.scheduled_date }}</span>
+                    est. {{ sc.estimated_count }}× {{ sc.estimated_type }} → actual {{ sc.actual_count }}× {{ sc.actual_type }}
+                    <span class="abs-sched-variance" [class.abs-sched-over]="(sc.actual_count ?? 0) > sc.estimated_count">
+                      ({{ (sc.actual_count ?? 0) - sc.estimated_count > 0 ? '+' : '' }}{{ (sc.actual_count ?? 0) - sc.estimated_count }})
+                    </span>
+                  </div>
+                  <div class="abs-sched-form" *ngIf="isViewingToday">
+                    <input type="date" class="abs-sched-input" [attr.data-plan-date-for]="s.item_index" />
+                    <input type="text" class="abs-sched-input" [attr.data-plan-type-for]="s.item_index" placeholder="type (e.g. wine)" />
+                    <input type="number" min="1" class="abs-sched-input abs-sched-input-num" [attr.data-plan-count-for]="s.item_index" placeholder="#" />
+                    <button type="button" class="abs-sched-add-btn" [disabled]="isUpdating()" (click)="submitSchedule(s.item_index)">
+                      + Pre-declare a planned break
                     </button>
                   </div>
                 </div>
@@ -543,6 +596,46 @@ const STAT_META = [
       font-size: 11px;
       cursor: pointer;
     }
+    .abs-schedule { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+    .abs-sched-item {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      background: rgba(200,168,75,0.08);
+      border: 1px solid rgba(200,168,75,0.35);
+      border-radius: 4px;
+      padding: 6px;
+    }
+    .abs-sched-head { display: flex; justify-content: space-between; font-size: 11px; }
+    .abs-sched-date { color: #c8a84b; }
+    .abs-sched-est { color: #b0a89a; }
+    .abs-sched-resolve { display: flex; gap: 4px; }
+    .abs-sched-resolved { font-size: 11px; color: #b0a89a; display: flex; gap: 4px; flex-wrap: wrap; }
+    .abs-sched-variance { color: #4caf6e; }
+    .abs-sched-variance.abs-sched-over { color: #e05c44; }
+    .abs-sched-form { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 2px; }
+    .abs-sched-input {
+      background: rgba(0,0,0,0.35);
+      border: 1px solid #3a3a5a;
+      border-radius: 4px;
+      color: #e0d5c0;
+      font-size: 11px;
+      padding: 5px 6px;
+      flex: 1;
+      min-width: 70px;
+    }
+    .abs-sched-input-num { flex: 0 0 60px; min-width: 60px; }
+    .abs-sched-add-btn, .abs-sched-resolve-btn {
+      background: rgba(76,175,110,0.12);
+      border: 1px solid #4caf6e;
+      color: #4caf6e;
+      border-radius: 4px;
+      padding: 5px 8px;
+      font-size: 11px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .abs-sched-add-btn:disabled, .abs-sched-resolve-btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .abs-modal-backdrop {
       position: fixed;
       inset: 0;
@@ -683,6 +776,7 @@ export class AcmPanelComponent implements OnInit, OnChanges {
   isUpdating         = signal(false);
   abstinenceStreaks  = signal<AbstinenceStreakView[]>([]);
   resistanceOpen     = signal<Set<number>>(new Set());
+  scheduleOpen       = signal<Set<number>>(new Set());
   breakModal         = signal<BreakModalState | null>(null);
   newRecordMsg       = signal<string | null>(null);
 
@@ -896,6 +990,118 @@ export class AcmPanelComponent implements OnInit, OnChanges {
         },
         error: (err) => {
           console.error('[ACM] resistance event failed:', err);
+          this.isUpdating.set(false);
+        },
+      });
+  }
+
+  upcomingSchedules(s: AbstinenceStreakView): ScheduledBreakView[] {
+    return (s.scheduled_breaks ?? []).filter((sc) => !sc.resolved);
+  }
+
+  resolvedSchedules(s: AbstinenceStreakView): ScheduledBreakView[] {
+    return [...(s.scheduled_breaks ?? [])]
+      .filter((sc) => sc.resolved)
+      .reverse()
+      .slice(0, 5);
+  }
+
+  toggleScheduleOpen(itemIndex: number): void {
+    const next = new Set(this.scheduleOpen());
+    if (next.has(itemIndex)) next.delete(itemIndex);
+    else next.add(itemIndex);
+    this.scheduleOpen.set(next);
+  }
+
+  /** Pre-declare an upcoming indulgence (Disciplined Indulgence scheduling — Phase 3). */
+  submitSchedule(itemIndex: number): void {
+    const dateEl = document.querySelector(
+      `input[data-plan-date-for="${itemIndex}"]`,
+    ) as HTMLInputElement | null;
+    const typeEl = document.querySelector(
+      `input[data-plan-type-for="${itemIndex}"]`,
+    ) as HTMLInputElement | null;
+    const countEl = document.querySelector(
+      `input[data-plan-count-for="${itemIndex}"]`,
+    ) as HTMLInputElement | null;
+
+    const scheduled_date = (dateEl?.value ?? '').trim();
+    const estimated_type = (typeEl?.value ?? '').trim();
+    const estimated_count = Number(countEl?.value ?? 0);
+
+    if (
+      !scheduled_date ||
+      !estimated_type ||
+      !Number.isInteger(estimated_count) ||
+      estimated_count <= 0 ||
+      this.isUpdating()
+    ) {
+      return;
+    }
+
+    this.isUpdating.set(true);
+    this.http
+      .post<{ success: boolean; streak: AbstinenceStreakView }>(
+        `${environment.apiUrl}/api/abstinence/${itemIndex}/schedule`,
+        { scheduled_date, estimated_type, estimated_count },
+      )
+      .subscribe({
+        next: (res) => {
+          if (res.success && res.streak) {
+            this.abstinenceStreaks.update((list) =>
+              list.map((s) => (s.item_index === res.streak.item_index ? res.streak : s)),
+            );
+            if (dateEl) dateEl.value = '';
+            if (typeEl) typeEl.value = '';
+            if (countEl) countEl.value = '';
+          }
+          this.isUpdating.set(false);
+        },
+        error: (err) => {
+          console.error('[ACM] schedule indulgence failed:', err);
+          this.isUpdating.set(false);
+        },
+      });
+  }
+
+  /** Reconcile a previously-scheduled indulgence with what actually happened. */
+  resolveSchedule(itemIndex: number, scheduledId: string): void {
+    const typeEl = document.querySelector(
+      `input[data-actual-type-for="${scheduledId}"]`,
+    ) as HTMLInputElement | null;
+    const countEl = document.querySelector(
+      `input[data-actual-count-for="${scheduledId}"]`,
+    ) as HTMLInputElement | null;
+
+    const actual_type = (typeEl?.value ?? '').trim();
+    const actual_count = Number(countEl?.value ?? 0);
+
+    if (!actual_type || !Number.isInteger(actual_count) || actual_count < 0 || this.isUpdating()) {
+      return;
+    }
+
+    this.isUpdating.set(true);
+    this.http
+      .patch<{
+        success: boolean;
+        compound_break: boolean;
+        variance: { type_matched: boolean; count_diff: number };
+        streak: AbstinenceStreakView;
+      }>(`${environment.apiUrl}/api/abstinence/${itemIndex}/schedule/${scheduledId}/resolve`, {
+        actual_type,
+        actual_count,
+      })
+      .subscribe({
+        next: (res) => {
+          if (res.success && res.streak) {
+            this.abstinenceStreaks.update((list) =>
+              list.map((s) => (s.item_index === res.streak.item_index ? res.streak : s)),
+            );
+          }
+          this.isUpdating.set(false);
+        },
+        error: (err) => {
+          console.error('[ACM] resolve scheduled indulgence failed:', err);
           this.isUpdating.set(false);
         },
       });

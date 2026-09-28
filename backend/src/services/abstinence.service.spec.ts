@@ -6,9 +6,11 @@ import {
   applyBreak,
   applyDailyIncrement,
   appendResistance,
+  appendScheduledBreak,
   detectCompoundBreak,
   normalizeStreakRow,
   parseJsonArray,
+  resolveScheduledBreak,
   toPublicView,
   type AbstinenceStreakRow,
 } from '../services/abstinence.service';
@@ -24,6 +26,7 @@ function row(partial: Partial<AbstinenceStreakRow> & { item_index: number }): Ab
     last_break_type: partial.last_break_type ?? null,
     break_log: partial.break_log ?? [],
     resistance_events: partial.resistance_events ?? [],
+    scheduled_breaks: partial.scheduled_breaks ?? [],
   };
 }
 
@@ -135,5 +138,135 @@ describe('abstinence.service pure helpers', () => {
     expect(ok.updated.current_streak).toBe(15);
     expect(ok.updated.resistance_events).toHaveLength(1);
     expect(ok.updated.resistance_events[0].note).toBe('Turned down open bar');
+  });
+
+  describe('Disciplined Indulgence scheduling (Phase 3)', () => {
+    const baseParams = {
+      id: 'sched-1',
+      scheduledDate: '2026-08-01',
+      estimatedType: 'wine',
+      estimatedCount: 2,
+      createdAt: '2026-07-17T12:00:00.000Z',
+    };
+
+    it('appendScheduledBreak validates and appends a pre-declared entry', () => {
+      const base = row({ item_index: 0 });
+      const result = appendScheduledBreak(base, baseParams);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.updated.scheduled_breaks).toHaveLength(1);
+      expect(result.updated.scheduled_breaks[0]).toMatchObject({
+        id: 'sched-1',
+        scheduled_date: '2026-08-01',
+        estimated_type: 'wine',
+        estimated_count: 2,
+        resolved: false,
+      });
+      // Streak untouched by scheduling alone.
+      expect(result.updated.current_streak).toBe(base.current_streak);
+    });
+
+    it('appendScheduledBreak rejects invalid estimated_count / date / type', () => {
+      const base = row({ item_index: 0 });
+      expect(appendScheduledBreak(base, { ...baseParams, estimatedCount: 0 }).ok).toBe(false);
+      expect(appendScheduledBreak(base, { ...baseParams, estimatedCount: -1 }).ok).toBe(false);
+      expect(appendScheduledBreak(base, { ...baseParams, estimatedType: '  ' }).ok).toBe(false);
+      expect(appendScheduledBreak(base, { ...baseParams, scheduledDate: '08/01/2026' }).ok).toBe(
+        false,
+      );
+    });
+
+    it('resolveScheduledBreak reconciles estimate vs actual and applies the normal break flow', () => {
+      const scheduled = row({
+        item_index: 0,
+        current_streak: 30,
+        scheduled_breaks: [
+          {
+            id: 'sched-1',
+            scheduled_date: '2026-08-01',
+            estimated_type: 'wine',
+            estimated_count: 2,
+            created_at: '2026-07-17T12:00:00.000Z',
+            resolved: false,
+          },
+        ],
+      });
+      const sibling = row({ item_index: 10, last_break_date: null });
+
+      const result = resolveScheduledBreak(scheduled, [scheduled, sibling], 'sched-1', {
+        actualType: 'wine',
+        actualCount: 3,
+        resolvedAt: '2026-08-01',
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.updated.current_streak).toBe(0);
+      expect(result.updated.last_break_type).toBe('scheduled');
+      expect(result.updated.break_log).toHaveLength(1);
+      expect(result.updated.break_log[0].type).toBe('scheduled');
+      expect(result.updated.scheduled_breaks[0].resolved).toBe(true);
+      expect(result.updated.scheduled_breaks[0].actual_count).toBe(3);
+      expect(result.variance).toEqual({ type_matched: true, count_diff: 1 });
+      expect(result.compound_break).toBe(false);
+    });
+
+    it('resolveScheduledBreak flags a type mismatch and negative count_diff (drank less than planned)', () => {
+      const scheduled = row({
+        item_index: 0,
+        scheduled_breaks: [
+          {
+            id: 'sched-1',
+            scheduled_date: '2026-08-01',
+            estimated_type: 'wine',
+            estimated_count: 4,
+            created_at: '2026-07-17T12:00:00.000Z',
+            resolved: false,
+          },
+        ],
+      });
+
+      const result = resolveScheduledBreak(scheduled, [scheduled], 'sched-1', {
+        actualType: 'beer',
+        actualCount: 1,
+        resolvedAt: '2026-08-01',
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.variance).toEqual({ type_matched: false, count_diff: -3 });
+    });
+
+    it('resolveScheduledBreak rejects unknown id or an already-resolved entry', () => {
+      const scheduled = row({
+        item_index: 0,
+        scheduled_breaks: [
+          {
+            id: 'sched-1',
+            scheduled_date: '2026-08-01',
+            estimated_type: 'wine',
+            estimated_count: 2,
+            created_at: '2026-07-17T12:00:00.000Z',
+            resolved: true,
+            actual_type: 'wine',
+            actual_count: 2,
+            resolved_at: '2026-08-01',
+          },
+        ],
+      });
+
+      expect(
+        resolveScheduledBreak(scheduled, [scheduled], 'missing-id', {
+          actualType: 'wine',
+          actualCount: 2,
+          resolvedAt: '2026-08-02',
+        }).ok,
+      ).toBe(false);
+      expect(
+        resolveScheduledBreak(scheduled, [scheduled], 'sched-1', {
+          actualType: 'wine',
+          actualCount: 2,
+          resolvedAt: '2026-08-02',
+        }).ok,
+      ).toBe(false);
+    });
   });
 });
