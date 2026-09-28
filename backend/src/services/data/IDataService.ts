@@ -155,6 +155,22 @@ export interface GrandConvergenceData {
   updated_at?: string;
 }
 
+export interface BodyStatusRow {
+  id?: string;
+  user_id?: string;
+  body_part: string;
+  type: 'injury' | 'illness' | 'disease';
+  severity: 'minor' | 'moderate' | 'severe' | 'critical';
+  name: string;
+  description?: string;
+  start_date: string;                 // ISO timestamp
+  estimated_recovery_days?: number;
+  notes?: string;
+  impacts_actions?: string[];
+  xp_penalty?: number;
+  created_at?: string;
+}
+
 // ─── Interface ─────────────────────────────────────────────────────────────
 
 export interface IDataService {
@@ -209,4 +225,10 @@ export interface IDataService {
   upsertQuestLines(userId: string, questLines: QuestLineEntry[]): Promise<void>;
   getGrandConvergence(userId: string): Promise<GrandConvergenceData | null>;
   upsertGrandConvergence(userId: string, data: Partial<GrandConvergenceData>): Promise<void>;
+
+  // ── Body Status ───────────────────────────────────────────────────────────
+  getBodyStatuses(userId: string): Promise<BodyStatusRow[]>;
+  addBodyStatus(userId: string, entry: Omit<BodyStatusRow, 'id' | 'user_id' | 'created_at'>): Promise<BodyStatusRow>;
+  updateBodyStatus(userId: string, id: string, patch: Partial<BodyStatusRow>): Promise<void>;
+  removeBodyStatus(userId: string, id: string): Promise<void>;
 }

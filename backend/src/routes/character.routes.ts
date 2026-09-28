@@ -309,8 +309,10 @@ router.get('/analytics', async (req: Request, res: Response) => {
 });
 
 /**
- * GET /api/character/injuries
- * Returns active injuries. Injury tracking will move to a dedicated Supabase table (Sprint 11).
+ * GET /api/character/injuries — DEPRECATED, superseded by GET /api/body-status
+ * (real Supabase-backed body_status table, see bodyStatus.routes.ts). Kept as
+ * a dead stub only so any stale cached frontend build hitting the old path
+ * doesn't 404; BodyStatusService.syncFromJournal() now calls /api/body-status.
  */
 router.get('/injuries', (_req: Request, res: Response) => {
   res.json({ success: true, injuries: [] });

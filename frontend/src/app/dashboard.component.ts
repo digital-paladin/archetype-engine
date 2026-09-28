@@ -254,7 +254,8 @@ const NAV_TABS: { id: PanelId; icon: string; label: string }[] = [
                 [characterName]="'Your Archetype'"
                 [currentXP]="daysElapsed()"
                 [maxXP]="365"
-                [xpPercentage]="levelPct()">
+                [xpPercentage]="levelPct()"
+                (bodyStatusMarkerClicked)="onBodyStatusMarkerClicked($event)">
             </app-character-display>
           </section>
           
@@ -349,7 +350,7 @@ const NAV_TABS: { id: PanelId; icon: string; label: string }[] = [
 
           <!-- ── Health Panel ── -->
           <ng-container *ngIf="activePanel() === 'health'">
-            <app-body-diagram></app-body-diagram>
+            <app-body-diagram [preSelectedStatusId]="preSelectedBodyStatusId()"></app-body-diagram>
             <app-sleep-panel
               [activities]="activitiesData()"
               [vitals]="vitalsData()"
@@ -469,6 +470,8 @@ const NAV_TABS: { id: PanelId; icon: string; label: string }[] = [
 export class DashboardComponent implements OnInit, OnDestroy {
   readonly navTabs = NAV_TABS;
   activePanel = signal<PanelId>('character');
+  /** Set when a 3D-model body-status marker is clicked — passed down to app-body-diagram to pre-open that status. */
+  preSelectedBodyStatusId = signal<string | null>(null);
 
   xpProjection        = signal<XPProjection | null>(null);
   isLoading           = signal(true);
@@ -711,6 +714,12 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     window.removeEventListener('navigate-to-panel', this.boundNavigateToPanel);
+  }
+
+  /** 3D-model body-status marker clicked — jump to Health and pre-select that status there. */
+  onBodyStatusMarkerClicked(statusId: string): void {
+    this.preSelectedBodyStatusId.set(statusId);
+    this.setPanel('health');
   }
 
   setPanel(panel: PanelId) {

@@ -102,3 +102,46 @@ export function clearAllEffects(): void {
   effects = [];
   saveToDisk();
 }
+
+// ── Auto-managed "Sleep Deprived" debuff ────────────────────────────────────
+
+const SLEEP_DEPRIVED_NAME = 'Sleep Deprived';
+/** Reuses the same boundary as the "Fatigued" vitality bucket — one canonical threshold. */
+export const SLEEP_DEPRIVED_VITALITY_THRESHOLD = 60;
+
+function buildSleepDeprivedPayload(sleepDebt: number): CreateEffectPayload {
+  return {
+    name: SLEEP_DEPRIVED_NAME,
+    type: 'debuff',
+    category: 'training',
+    source: `14-day rolling sleep debt: ${sleepDebt}h`,
+    icon: '😴',
+    effects: [
+      { stat: 'Focus',            modifier: '-20%', direction: 'negative' },
+      { stat: 'XP Consolidation', modifier: '-10%', direction: 'negative' },
+    ],
+    duration: -1, // condition-managed, not time-managed — see syncSleepDeprivedEffect
+  };
+}
+
+/**
+ * Auto-applies/removes the "Sleep Deprived" debuff based on the current
+ * vitality reading. Called from syncSleepDebtFromJournal() every time it
+ * runs (wearable sync, consolidation, server cron, dashboard load, manual
+ * journal edits) — no separate trigger needed. Idempotent: re-applying while
+ * still active just refreshes the displayed debt figure.
+ */
+export function syncSleepDeprivedEffect(vitality: number, sleepDebt: number): void {
+  const existing = getAllEffects().find(e => e.name === SLEEP_DEPRIVED_NAME);
+  const shouldBeActive = vitality < SLEEP_DEPRIVED_VITALITY_THRESHOLD;
+
+  if (shouldBeActive && !existing) {
+    addEffect(buildSleepDeprivedPayload(sleepDebt));
+  } else if (!shouldBeActive && existing) {
+    removeEffect(existing.id);
+  } else if (shouldBeActive && existing) {
+    // Refresh the displayed debt figure rather than leaving a stale source string.
+    removeEffect(existing.id);
+    addEffect(buildSleepDeprivedPayload(sleepDebt));
+  }
+}

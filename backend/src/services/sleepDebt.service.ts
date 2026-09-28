@@ -7,8 +7,10 @@
  * excluded rather than assumed to be 7.5h.
  */
 import { getDataService } from './data/dataService';
-import { CharacterProfile } from './data/IDataService';
+import { CharacterProfile, BodyStatusRow } from './data/IDataService';
 import { addCalendarDays, localDateStr } from './sleepHistoryCalendar';
+import { syncSleepDeprivedEffect } from './statusEffects.service';
+import { isBodyStatusHealed, maxVitalityPenalty } from './bodyStatus.service';
 
 export const SLEEP_BASELINE_HOURS = 7.5;
 export const SLEEP_DEBT_WINDOW_DAYS = 14;
@@ -47,6 +49,9 @@ type SleepDebtDb = {
     fromDate: string,
     toDate: string,
   ): Promise<Array<{ date: string; hours: number; score: number }>>;
+  // Optional — older test mocks that predate the injury-dent feature won't have this;
+  // syncSleepDebtFromJournal() degrades gracefully to "no injury penalty" if absent.
+  getBodyStatuses?(userId: string): Promise<BodyStatusRow[]>;
 };
 
 /** Deficit contribution for one night: 0 if no data logged or hours >= baseline. */
@@ -82,7 +87,12 @@ export function computeRollingSleepDebt(
   return Math.round(total * 100) / 100;
 }
 
-/** 3-segment vitality curve (matches Sleep tab color tiers): flat 100 ≤2h, −2/h to 5h, −3/h above 5h. */
+/** Never floors to literal 0 — extreme sleep debt still reads as "severely impaired," not "dead." */
+export const SLEEP_DEBT_VITALITY_FLOOR = 10;
+/** Vitality lost per hour of debt beyond debt=5 (was 3/h — half as punishing, extends the curve to ~61h instead of ~36h). */
+export const SLEEP_DEBT_SEVERE_SLOPE = 1.5;
+
+/** 3-segment vitality curve (matches Sleep tab color tiers): flat 100 ≤2h, −2/h to 5h, −1.5/h above 5h down to a floor of 10. */
 export function vitalityFromSleepDebt(debt: number): number {
   let vitality: number;
   if (debt <= 2) {
@@ -90,7 +100,7 @@ export function vitalityFromSleepDebt(debt: number): number {
   } else if (debt <= 5) {
     vitality = 100 - (debt - 2) * 2;
   } else {
-    vitality = Math.max(0, 94 - (debt - 5) * 3);
+    vitality = Math.max(SLEEP_DEBT_VITALITY_FLOOR, 94 - (debt - 5) * SLEEP_DEBT_SEVERE_SLOPE);
   }
   return Math.round(vitality * 10) / 10;
 }
@@ -174,9 +184,26 @@ export async function syncSleepDebtFromJournal(
   const sleepDebt = Math.round(
     inWindow.reduce((sum, n) => sum + nightlyDeficit(n.hours), 0) * 100,
   ) / 100;
-  const vitality = vitalityFromSleepDebt(sleepDebt);
+  const sleepVitality = vitalityFromSleepDebt(sleepDebt);
+
+  // Injury/illness/disease dent (restores the old file-model's unused injury/RecoveryFactor
+  // concept on the DB-backed path) — worst active severity only, not cumulative, same rule
+  // as the XP penalty in activity.routes.ts. Never pushes vitality below the sleep-debt floor.
+  let activeBodyStatuses: BodyStatusRow[] = [];
+  try {
+    const rows = (await db.getBodyStatuses?.(userId)) ?? [];
+    activeBodyStatuses = rows.filter(row => !isBodyStatusHealed(row));
+  } catch (bsErr) {
+    console.warn('[SLEEP-DEBT] Body-status lookup failed (no injury dent applied):',
+      bsErr instanceof Error ? bsErr.message : bsErr);
+  }
+  const injuryPenalty = maxVitalityPenalty(activeBodyStatuses);
+  const vitality = Math.max(SLEEP_DEBT_VITALITY_FLOOR, sleepVitality - injuryPenalty);
+
   const opening = Number(profile.sleep_debt) || 0;
   const sleepTrend = sleepTrendFromDebt(opening, sleepDebt);
+
+  syncSleepDeprivedEffect(vitality, sleepDebt);
 
   const tonightHours = journal.find(n => String(n.date).slice(0, 10) === today)?.hours ?? 0;
   const extensionStreak = computeExtensionStreak(journal, { today });

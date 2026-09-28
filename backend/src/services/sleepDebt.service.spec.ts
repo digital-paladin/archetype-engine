@@ -31,13 +31,20 @@ describe('nightlyDeficit', () => {
 });
 
 describe('vitalityFromSleepDebt / trend', () => {
-  it('follows the 3-segment curve (100 ≤2h, −2/h to 5h, −3/h above 5h)', () => {
+  it('follows the 3-segment curve (100 ≤2h, −2/h to 5h, −1.5/h above 5h down to a floor of 10)', () => {
     expect(vitalityFromSleepDebt(0)).toBe(100);
     expect(vitalityFromSleepDebt(2)).toBe(100);
     expect(vitalityFromSleepDebt(3.5)).toBe(97);
     expect(vitalityFromSleepDebt(5)).toBe(94);
-    expect(vitalityFromSleepDebt(10)).toBe(79);
-    expect(vitalityFromSleepDebt(12.23)).toBeCloseTo(72.3, 1);
+    expect(vitalityFromSleepDebt(10)).toBe(86.5);
+    expect(vitalityFromSleepDebt(12.23)).toBeCloseTo(83.2, 1);
+  });
+
+  it('extends past the old ~36h crossover instead of flatlining, reaching a floor of 10 at debt=61', () => {
+    expect(vitalityFromSleepDebt(36.33)).toBeCloseTo(47, 1); // old formula floored to 0 here
+    expect(vitalityFromSleepDebt(61)).toBe(10);
+    expect(vitalityFromSleepDebt(65.97)).toBe(10); // never reads as literal 0/"dead"
+    expect(vitalityFromSleepDebt(100)).toBe(10); // floor holds arbitrarily far out
   });
 
   it('classifies trend with 0.05 hysteresis', () => {
@@ -164,6 +171,79 @@ describe('syncSleepDebtFromJournal', () => {
     // 9.5h → 2.0 surplus → +10% nightly; 5-night streak → +5%; combined 15.5%
     expect(result?.extensionBonusPct).toBe(15.5);
     expect(upsert.mock.calls[0][1].sleep_extension_streak).toBe(5);
+  });
+});
+
+describe('syncSleepDebtFromJournal — body-status vitality dent', () => {
+  function daysAgo(n: number): string {
+    const d = new Date();
+    d.setDate(d.getDate() - n);
+    return d.toISOString();
+  }
+
+  function makeDb(getBodyStatuses: jest.Mock, upsert = jest.fn().mockResolvedValue(undefined)) {
+    return {
+      getCharacterProfile: jest.fn().mockResolvedValue({ sleep_debt: 0 }),
+      listJournalSleepRange: jest.fn().mockResolvedValue([]), // debt=0 → sleepVitality=100
+      upsertCharacterProfile: upsert,
+      getBodyStatuses,
+    };
+  }
+
+  it('applies no dent when there are no active body statuses', async () => {
+    const db = makeDb(jest.fn().mockResolvedValue([]));
+    const result = await syncSleepDebtFromJournal('user-1', db, '2026-08-17');
+    expect(result?.vitality).toBe(100);
+  });
+
+  it('dents vitality by the worst active severity — not cumulative', async () => {
+    const db = makeDb(jest.fn().mockResolvedValue([
+      { id: 'a', body_part: 'left-knee', severity: 'moderate', start_date: daysAgo(1) },
+      { id: 'b', body_part: 'right-ankle', severity: 'critical', start_date: daysAgo(1) },
+      { id: 'c', body_part: 'left-hand', severity: 'severe', start_date: daysAgo(1) },
+    ]));
+    const result = await syncSleepDebtFromJournal('user-1', db, '2026-08-17');
+    expect(result?.vitality).toBe(75); // 100 - 25 (critical), not 100-5-25-15
+  });
+
+  it('ignores healed statuses (past estimated_recovery_days)', async () => {
+    const db = makeDb(jest.fn().mockResolvedValue([
+      { id: 'a', body_part: 'left-knee', severity: 'critical', start_date: daysAgo(30), estimated_recovery_days: 7 },
+    ]));
+    const result = await syncSleepDebtFromJournal('user-1', db, '2026-08-17');
+    expect(result?.vitality).toBe(100);
+  });
+
+  it('clamps the dented result at SLEEP_DEBT_VITALITY_FLOOR — critical injury can\'t push below the floor', async () => {
+    const upsert = jest.fn().mockResolvedValue(undefined);
+    const db = {
+      getCharacterProfile: jest.fn().mockResolvedValue({ sleep_debt: 0 }),
+      listJournalSleepRange: jest.fn().mockResolvedValue([
+        { date: '2026-08-17', hours: 0, score: 0 }, // pushes debt high → sleepVitality near/at floor already
+      ]),
+      upsertCharacterProfile: upsert,
+      getBodyStatuses: jest.fn().mockResolvedValue([
+        { id: 'a', body_part: 'left-knee', severity: 'critical', start_date: daysAgo(1) },
+      ]),
+    };
+    const result = await syncSleepDebtFromJournal('user-1', db, '2026-08-17');
+    expect(result!.vitality).toBeGreaterThanOrEqual(10);
+  });
+
+  it('degrades gracefully (no dent) if the body-status lookup throws', async () => {
+    const db = makeDb(jest.fn().mockRejectedValue(new Error('db down')));
+    const result = await syncSleepDebtFromJournal('user-1', db, '2026-08-17');
+    expect(result?.vitality).toBe(100);
+  });
+
+  it('still works when getBodyStatuses is absent (older SleepDebtDb mocks)', async () => {
+    const upsert = jest.fn().mockResolvedValue(undefined);
+    const result = await syncSleepDebtFromJournal('user-1', {
+      getCharacterProfile: jest.fn().mockResolvedValue({ sleep_debt: 0 }),
+      listJournalSleepRange: jest.fn().mockResolvedValue([]),
+      upsertCharacterProfile: upsert,
+    }, '2026-08-17');
+    expect(result?.vitality).toBe(100);
   });
 });
 

@@ -1,8 +1,11 @@
-import { Component, OnInit, OnDestroy, ViewChild, ElementRef, AfterViewInit, Input } from '@angular/core';
+import { Component, OnInit, OnDestroy, ViewChild, ElementRef, AfterViewInit, Input, Output, EventEmitter } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { Subscription } from 'rxjs';
 import { ThreeCharacterService, ActivityAnimation } from './three-character.service';
 import { ActionTrackerService, ActiveAction } from './action-tracker.service';
 import { ActionTrackerComponent } from './action-tracker.component';
+import { BodyStatusService } from './body-status.service';
+import { BodyStatus } from './body-status.interface';
 
 @Component({
   selector: 'app-character-display',
@@ -43,6 +46,20 @@ import { ActionTrackerComponent } from './action-tracker.component';
           [style.left.%]="textItem.x"
           [style.top.%]="textItem.y">
           {{ textItem.text }}
+        </div>
+      </div>
+
+      <!-- Body Status Markers — pulsing dots pointing at active injuries/illness on the 3D model -->
+      <div class="body-status-markers">
+        <div
+          *ngFor="let marker of bodyStatusMarkers"
+          class="body-status-marker"
+          [style.left.%]="marker.xPct"
+          [style.top.%]="marker.yPct"
+          [style.background]="marker.color"
+          [style.boxShadow]="'0 0 8px ' + marker.color"
+          [title]="marker.name + ' (' + marker.severity + ')'"
+          (click)="onMarkerClick(marker)">
         </div>
       </div>
 
@@ -239,6 +256,32 @@ import { ActionTrackerComponent } from './action-tracker.component';
     .activity-btn:active {
       transform: translateY(0);
     }
+
+    .body-status-markers {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+
+    .body-status-marker {
+      position: absolute;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      border: 2px solid rgba(255, 255, 255, 0.85);
+      transform: translate(-50%, -50%);
+      cursor: pointer;
+      pointer-events: auto;
+      animation: body-status-pulse 1.6s ease-in-out infinite;
+    }
+
+    @keyframes body-status-pulse {
+      0%, 100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+      50%      { transform: translate(-50%, -50%) scale(1.35); opacity: 0.7; }
+    }
   `]
 })
 export class CharacterDisplayComponent implements OnInit, AfterViewInit, OnDestroy {
@@ -250,17 +293,25 @@ export class CharacterDisplayComponent implements OnInit, AfterViewInit, OnDestr
   @Input() maxXP: number = 2107;
   @Input() xpPercentage: number = 88;
 
+  /** Emits the clicked status's id — dashboard switches to the Health panel and pre-selects it. */
+  @Output() bodyStatusMarkerClicked = new EventEmitter<string>();
+
   floatingTexts: Array<{ text: string; x: number; y: number; size: string; id: number }> = [];
+  bodyStatusMarkers: Array<{ id: string; xPct: number; yPct: number; color: string; name: string; severity: string }> = [];
   private textIdCounter = 0;
   private modelLoaded = false;
   private currentAnimation: string | null = null;
   private resizeObserver!: ResizeObserver;
   private boundHandleXPText!: EventListener;
   private boundHandlePlayAnimation!: EventListener;
+  private boundRecomputeMarkers!: () => void;
+  private activeBodyStatuses: BodyStatus[] = [];
+  private bodyStatusSubscription: Subscription | null = null;
 
   constructor(
     private threeService: ThreeCharacterService,
-    private actionTracker: ActionTrackerService
+    private actionTracker: ActionTrackerService,
+    private bodyStatusService: BodyStatusService
   ) {}
 
   ngOnInit(): void {
@@ -268,6 +319,10 @@ export class CharacterDisplayComponent implements OnInit, AfterViewInit, OnDestr
     this.boundHandlePlayAnimation = this.handlePlayAnimation.bind(this) as EventListener;
     window.addEventListener('xp-text', this.boundHandleXPText);
     window.addEventListener('play-animation', this.boundHandlePlayAnimation);
+
+    this.bodyStatusSubscription = this.bodyStatusService.getStatuses().subscribe(() => {
+      this.activeBodyStatuses = this.bodyStatusService.getActiveStatuses();
+    });
   }
 
   ngAfterViewInit(): void {
@@ -292,6 +347,11 @@ export class CharacterDisplayComponent implements OnInit, AfterViewInit, OnDestr
         this.modelLoaded = true;
         this.threeService.animate();
         this.threeService.playAnimation('idle', true); // ensure idle on every model load
+
+        // Recompute body-status marker screen positions every render-loop tick —
+        // the character moves (animation, resize, camera fx) so a fixed % would drift.
+        this.boundRecomputeMarkers = this.recomputeBodyStatusMarkers.bind(this);
+        this.threeService.onFrame(this.boundRecomputeMarkers);
       }).catch(() => {
         if (path !== 'assets/models/paladin-novice.glb') {
           console.warn(`Model not found: ${path} — falling back to paladin-novice.glb`);
@@ -306,9 +366,39 @@ export class CharacterDisplayComponent implements OnInit, AfterViewInit, OnDestr
 
   ngOnDestroy(): void {
     this.resizeObserver?.disconnect();
+    if (this.boundRecomputeMarkers) this.threeService.offFrame(this.boundRecomputeMarkers);
+    this.bodyStatusSubscription?.unsubscribe();
     this.threeService.dispose();
     window.removeEventListener('xp-text', this.boundHandleXPText);
     window.removeEventListener('play-animation', this.boundHandlePlayAnimation);
+  }
+
+  /** Recomputes screen-space marker positions for all active body statuses (called once per render-loop tick). */
+  private recomputeBodyStatusMarkers(): void {
+    if (this.activeBodyStatuses.length === 0) {
+      if (this.bodyStatusMarkers.length > 0) this.bodyStatusMarkers = [];
+      return;
+    }
+
+    const markers: Array<{ id: string; xPct: number; yPct: number; color: string; name: string; severity: string }> = [];
+    for (const status of this.activeBodyStatuses) {
+      const pos = this.threeService.getBodyPartScreenPosition(status.bodyPart);
+      if (!pos) continue;
+      markers.push({
+        id: status.id,
+        xPct: pos.xPct,
+        yPct: pos.yPct,
+        color: status.color,
+        name: status.name,
+        severity: status.severity,
+      });
+    }
+    this.bodyStatusMarkers = markers;
+  }
+
+  /** Clicking a marker jumps to the Health panel and pre-selects that status there. */
+  onMarkerClick(marker: { id: string }): void {
+    this.bodyStatusMarkerClicked.emit(marker.id);
   }
 
   private getModelPathForLevel(level: number): string {

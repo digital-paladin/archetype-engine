@@ -65,7 +65,7 @@ describe('XP Projection API', () => {
 
 // ─────────────────────────────────────────────────────────────
 // Vitality Status — Dynamic Formula (3-segment curve)
-// debt ≤ 2 → 100; 2 < debt ≤ 5 → 100 − (debt−2)×2; debt > 5 → max(0, 94−(debt−5)×3)
+// debt ≤ 2 → 100; 2 < debt ≤ 5 → 100 − (debt−2)×2; debt > 5 → max(10, 94−(debt−5)×1.5)
 // ─────────────────────────────────────────────────────────────
 describe('GET /api/vitality-status — dynamic vitality calculation', () => {
   function setupFixture(sleepDebt: number | null, status = 'Normal ✅') {
@@ -88,8 +88,8 @@ ${debtLine}
     setupFixture(12.23);
     const response = await request(app).get('/api/vitality-status');
     expect(response.status).toBe(200);
-    // 94 − (12.23 − 5) × 3 = 72.31 → rounds to 72.3
-    expect(response.body.current).toBeCloseTo(72.3, 1);
+    // 94 − (12.23 − 5) × 1.5 = 83.155 → rounds to 83.2
+    expect(response.body.current).toBeCloseTo(83.2, 1);
   });
 
   it('returns 97 when sleep debt is 3.5 hrs (middle segment)', async () => {

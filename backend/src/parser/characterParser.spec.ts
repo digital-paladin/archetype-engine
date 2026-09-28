@@ -292,7 +292,7 @@ describe('CharacterParser — extractSleepDebt', () => {
   });
 
   it('should set effectOnVitality using 3-segment curve when debt > 5', async () => {
-    mockContent(SLEEP_DEBT_FIXTURE); // 12.23 hrs → 94 − (12.23−5)×3 ≈ 72.3
+    mockContent(SLEEP_DEBT_FIXTURE); // 12.23 hrs → 94 − (12.23−5)×1.5 ≈ 83.2
     const data = await parser.parse();
     expect(data.sleepDebt.effectOnVitality).toBeLessThan(100);
   });

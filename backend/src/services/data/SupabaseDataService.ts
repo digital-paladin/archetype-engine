@@ -7,7 +7,7 @@ import {
   ActivityEntry, VaultItem, FitbitTokens, WearableTokenRow,
   SpendingEntry, TreasurySettings,
   CharacterProfile,
-  QuestLineEntry, GrandConvergenceData,
+  QuestLineEntry, GrandConvergenceData, BodyStatusRow,
 } from './IDataService';
 import { fitbitTokensFromRow, fitbitTokensUpsertRow } from './fitbitTokenRow';
 
@@ -392,6 +392,50 @@ export class SupabaseDataService implements IDataService {
       .from('grand_convergence')
       .upsert({ ...data, user_id: userId, updated_at: new Date().toISOString() },
                { onConflict: 'user_id' });
+    if (error) throw error;
+  }
+
+  // ── Body Status ──────────────────────────────────────────────────────────
+
+  async getBodyStatuses(userId: string): Promise<BodyStatusRow[]> {
+    const { data, error } = await this.db
+      .from('body_status')
+      .select('*')
+      .eq('user_id', userId)
+      .order('start_date', { ascending: false });
+    if (error) throw error;
+    return (data ?? []) as BodyStatusRow[];
+  }
+
+  async addBodyStatus(
+    userId: string,
+    entry: Omit<BodyStatusRow, 'id' | 'user_id' | 'created_at'>,
+  ): Promise<BodyStatusRow> {
+    const { data, error } = await this.db
+      .from('body_status')
+      .insert({ ...entry, user_id: userId })
+      .select('*')
+      .single();
+    if (error) throw error;
+    return data as BodyStatusRow;
+  }
+
+  async updateBodyStatus(userId: string, id: string, patch: Partial<BodyStatusRow>): Promise<void> {
+    const { id: _id, user_id: _uid, created_at: _ca, ...rest } = patch;
+    const { error } = await this.db
+      .from('body_status')
+      .update(rest)
+      .eq('id', id)
+      .eq('user_id', userId);
+    if (error) throw error;
+  }
+
+  async removeBodyStatus(userId: string, id: string): Promise<void> {
+    const { error } = await this.db
+      .from('body_status')
+      .delete()
+      .eq('id', id)
+      .eq('user_id', userId);
     if (error) throw error;
   }
 }

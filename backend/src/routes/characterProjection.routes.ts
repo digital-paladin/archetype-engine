@@ -36,7 +36,7 @@ router.get('/vitality-status', async (req: Request, res: Response) => {
           status,
           sleepDebt,
           trend:     profile.sleep_trend ?? 'Stable',
-          flag:      '',
+          flag:      vitality < 60 ? 'Sleep Deprived ⚠️' : '',
           sleepExtensionStreak: sync?.extensionStreak ?? profile.sleep_extension_streak ?? 0,
           sleepExtensionBonusPct: sync?.extensionBonusPct ?? 0,
         });

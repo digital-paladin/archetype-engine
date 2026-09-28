@@ -4,6 +4,7 @@ import { XpCalculatorService } from '../services/xpCalculator.service';
 import { pushLog, getLogs } from '../services/activityLogStore';
 import { recordActivitySession, applyCourageFlag } from '../services/courage.service';
 import { getDataService } from '../services/data/dataService';
+import { getActiveBodyStatuses } from '../services/bodyStatus.service';
 
 const router = Router();
 
@@ -69,10 +70,38 @@ router.post('/', async (req: Request, res: Response) => {
 
     // Use client-supplied XP when provided (frontend has the authoritative calculation);
     // fall back to server-side estimate for legacy/manual calls.
-    const xp = (typeof clientXp === 'number' && clientXp > 0)
+    const rawXp = (typeof clientXp === 'number' && clientXp > 0)
       ? Math.round(clientXp)
       : totalServerXp;
     const category = xpCalculator.getCategoryFromActivity(activityType);
+
+    // ── Body-status XP penalty (previously dead code — BodyStatusService.getXPPenaltyForAction()
+    // was unit-tested but never wired into a real activity-logging path). Take the max active
+    // xp_penalty among statuses whose impacts_actions includes this activityType — highest wins,
+    // not cumulative, matching the frontend's own rule. Applied here, before both persistence and
+    // the response, so the DB value and what the client sees never drift apart. ──
+    const userId = (req as any).userId as string | undefined;
+    let xpPenaltyPct = 0;
+    if (userId) {
+      try {
+        const activeBodyStatuses = await getActiveBodyStatuses(userId);
+        const matching = activeBodyStatuses.filter(s => s.impacts_actions?.includes(activityType));
+        if (matching.length > 0) {
+          xpPenaltyPct = Math.max(...matching.map(s => s.xp_penalty ?? 0));
+        }
+      } catch (bsErr) {
+        console.warn('[ACTIVITY] Body-status penalty lookup failed (defaulting to 0%):',
+          bsErr instanceof Error ? bsErr.message : bsErr);
+      }
+    }
+    const penaltyMultiplier = (100 - xpPenaltyPct) / 100;
+    const xp = Math.round(rawXp * penaltyMultiplier);
+    // Same multiplier applied per-class so the response and the per-class Supabase writes below
+    // (character_stats) stay reconciled with the top-level `xp` the client sees.
+    const finalXpAwards = xpAwards.map(a => ({ ...a, xp: Math.round(a.xp * penaltyMultiplier) }));
+    if (xpPenaltyPct > 0) {
+      console.log(`[ACTIVITY] Body-status XP penalty applied: -${xpPenaltyPct}% (${rawXp} → ${xp})`);
+    }
 
     // ── Courage XP calculation (session bonus + optional flag) ──────────────
     const sessionCourageXP = recordActivitySession(activityType);
@@ -92,7 +121,6 @@ router.post('/', async (req: Request, res: Response) => {
     }
 
     // ── Supabase writes (non-blocking — failure must not block the HTTP response) ──
-    const userId = (req as any).userId as string | undefined;
     if (userId) {
       const dateStr = clientDate || new Date().toLocaleDateString('en-CA');
       setImmediate(async () => {
@@ -112,7 +140,7 @@ router.post('/', async (req: Request, res: Response) => {
 
           // 2. Apply XP to character_stats for each awarded class
           const allStats = await db.getCharacterStats(userId);
-          for (const award of xpAwards) {
+          for (const award of finalXpAwards) {
             const canonClass = toCanonicalClassName(award.class);
             const current    = allStats.find(s => s.class_name === canonClass);
             const lvl        = current?.level ?? 1;
@@ -147,8 +175,9 @@ router.post('/', async (req: Request, res: Response) => {
       category,
       activityType,
       duration,
-      xpAwards,
+      xpAwards: finalXpAwards,
       message: `Activity logged successfully! +${xp} XP`,
+      ...(xpPenaltyPct > 0 && { xpPenaltyPct }),
       ...(courageXPAwarded > 0 && { courageXPAwarded, courageMessage: `+${courageXPAwarded} Courage XP earned!` }),
     });
 
