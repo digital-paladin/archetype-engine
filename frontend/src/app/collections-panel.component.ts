@@ -62,6 +62,7 @@ const ARMOR_PIECES: ArmorPiece[] = [
 ];
 
 const TITLES: TitleDef[] = [
+  { id: 'architect', name: 'The Architect',         unlockStreak: 0,   rarity: 'legendary', description: 'Designer of this entire archetype system.' },
   { id: 'initiate', name: 'Paladin Initiate',      unlockStreak: 0,   rarity: 'common',    description: 'Began the archetype journey.' },
   { id: 'seeker',   name: 'Steadfast Seeker',       unlockStreak: 90,  rarity: 'uncommon',  description: '90-day continuous streak achieved.' },
   { id: 'keeper',   name: 'Iron Will Keeper',        unlockStreak: 180, rarity: 'rare',      description: '180 days of unbroken discipline.' },
