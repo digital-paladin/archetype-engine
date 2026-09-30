@@ -24,7 +24,7 @@ export type SkillCategory =
 
 export type SkillTier = 'basic' | 'intermediate' | 'advanced' | 'master';
 
-export type ActionType = 'prayer' | 'workout' | 'coding' | 'redteam' | 'artist' | 'lab' | 'meal' | 'water' | 'fasting';
+export type ActionType = 'prayer' | 'workout' | 'coding' | 'redteam' | 'artist' | 'lab' | 'meal' | 'water' | 'fasting' | 'combat';
 
 export interface Skill {
   id:              string;
@@ -193,9 +193,8 @@ export const ALL_SKILLS: Skill[] = [
   {
     id: 'mma-hook', name: 'Hook', icon: '↩️', category: 'mma',
     tier: 'basic', description: 'Circular power strike targeting temple or jaw.',
-    activityKey: 'mma-class', type: 'workout', animation: 'Push Up',
-    intensity: 'moderate', willpowerCost: 5, willpowerRegen: 0,
-    isExercise: true, exerciseType: 'technique'
+    activityKey: 'mma-class', type: 'combat', animation: 'combat',
+    intensity: 'moderate', willpowerCost: 5, willpowerRegen: 0
   },
   {
     id: 'mma-uppercut', name: 'Uppercut', icon: '⬆️', category: 'mma',
