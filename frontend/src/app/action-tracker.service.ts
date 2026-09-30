@@ -9,7 +9,7 @@ import { LevelProgressionService, LevelUpResult } from './level-progression.serv
 import { environment } from '../environments/environment';
 
 export interface ActiveAction {
-  type: 'prayer' | 'workout' | 'coding' | 'redteam' | 'artist' | 'lab' | 'meal' | 'water' | 'fasting';
+  type: 'prayer' | 'workout' | 'coding' | 'redteam' | 'artist' | 'lab' | 'meal' | 'water' | 'fasting' | 'combat';
   activityKey: string; // Key for xp-calculation.service (e.g., 'coding-routine', 'htb-medium')
   skillId?: string;    // Specific skill from skill-tree.data (e.g., 'rt-xss', 'mma-jab')
   startTime: Date;

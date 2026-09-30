@@ -449,6 +449,20 @@ export class CharacterDisplayComponent implements OnInit, AfterViewInit, OnDestr
   }
 
   // Action Tracking Methods - Start actions with looping animations
+  startCombat(): void {
+    if (!this.modelLoaded) return;
+
+    this.actionTracker.startAction(
+      'combat',
+      'mma-training',
+      'combat',
+      'Combat drill — right hook'
+    );
+
+    this.currentAnimation = 'combat';
+    this.threeService.playAnimation('combat', true);
+  }
+
   startPrayer(): void {
     if (!this.modelLoaded) return;
     
