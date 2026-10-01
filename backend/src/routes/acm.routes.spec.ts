@@ -134,7 +134,7 @@ describe('GET /api/acm/today', () => {
   // ── Sleep bonus ───────────────────────────────────────────────────────────
 
   it('applies sleep bonus: fitbit=100 => vitality=10 => bonus=5', async () => {
-    // Item 0 (alcohol abstention): W_CLARITY[0]=30, W_PLEASURE[0]=30, W_SPIRITUAL[0]=5, W_PHYSICAL[0]=0
+    // Item 0 (alcohol abstention): W_CLARITY[0]=28, W_PLEASURE[0]=30, W_SPIRITUAL[0]=5, W_PHYSICAL[0]=0
     mockGetACMEntries.mockResolvedValue([{ item_index: 0, completed: true }]);
     mockGetJournalEntry.mockResolvedValue({ fitbit_score: 100 });
 
@@ -143,8 +143,24 @@ describe('GET /api/acm/today', () => {
     expect(res.body.sleepBonus).toBe(5);
     expect(res.body.stats.spiritual).toBe(10);  // 5  + 5
     expect(res.body.stats.physical).toBe(5);    // 0  + 5
-    expect(res.body.stats.clarity).toBe(35);    // 30 + 5
+    expect(res.body.stats.clarity).toBe(33);    // 28 + 5
     expect(res.body.stats.pleasure).toBe(30);   // no sleepBonus on pleasure
+  });
+
+  // ── Linguist (item 14) ────────────────────────────────────────────────────
+
+  it('Deep Work: Linguist (item 14) adds 10 Mental Clarity and nothing else', async () => {
+    mockGetACMEntries.mockResolvedValue([{ item_index: 14, completed: true }]);
+    mockGetJournalEntry.mockResolvedValue(null);
+
+    const res = await request(makeApp()).get('/api/acm/today?date=2026-04-12');
+
+    expect(res.body.stats.clarity).toBe(10);
+    expect(res.body.stats.spiritual).toBe(0);
+    expect(res.body.stats.physical).toBe(0);
+    expect(res.body.stats.pleasure).toBe(0);
+    expect(res.body.itemStates[14]).toBe(true);
+    expect(res.body.itemStates.length).toBe(15);
   });
 
   it('sleepBonus is 0 when no journal entry exists', async () => {

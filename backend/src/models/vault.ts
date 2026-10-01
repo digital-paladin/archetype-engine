@@ -11,10 +11,12 @@ export type RewardTier = 'minimum' | 'acm_perfect' | 'perfect_week' | 'level_up'
 //  3: Deep Work: Dev       4: Deep Work: RedTeam 5: Deep Work: Artist
 //  6: Deep Work: Mech Eng  7: Fasting            8: Hydration          9: Diet Plan
 // 10: Abstained sexual    11: Protein           12: Bonfire Routine   13: DR-ALFRED Supplements
+// 14: Deep Work: Linguist
 // (Brush teeth removed Jun 2026 — maintenance marker, not a binding restriction)
 // (RedTeam weight 2→1 Jun 2026 — vow not yet established; revisit at 5+days/week)
-export const ACM_ITEM_WEIGHTS: number[] = [2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 2, 1, 2, 1];
-export const ACM_MAX_SCORE = ACM_ITEM_WEIGHTS.reduce((a, b) => a + b, 0); // 20
+// (Linguist added Oct 2026 at weight 1, like the other non-primary Deep Work items)
+export const ACM_ITEM_WEIGHTS: number[] = [2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 2, 1, 2, 1, 1];
+export const ACM_MAX_SCORE = ACM_ITEM_WEIGHTS.reduce((a, b) => a + b, 0); // 21
 
 /** Returns a multiplier in [0.5, 1.0] from a weighted ACM score. */
 export function calculateAcmMultiplier(weightedScore: number): number {

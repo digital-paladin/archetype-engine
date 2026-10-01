@@ -10,6 +10,7 @@
  *  4: Deep Work: RedTeam      11: Protein goal
  *  5: Deep Work: Artist       12: Pre-Sleep Bonfire Routine
  *  6: Deep Work: Mech Eng     13: DR-ALFRED Supplement Stack
+ * 14: Deep Work: Linguist
  */
 
 import { Router, Request, Response } from 'express';
@@ -19,15 +20,17 @@ import { getDataService } from '../services/data/dataService';
 const router = Router();
 const db = getDataService();
 
-// ── Stat weights (per item index, 0-13, each stat sums to 100) ───────────────
+// ── Stat weights (per item index, 0-14, each stat sums to 100) ───────────────
+// Linguist (14) added Oct 2026: W_CLARITY 10, funded by -2 each from alcohol, Dev, RedTeam, Artist, Mech Eng
+// Wake Up With God (1) now includes the daily gratitude line — weights unchanged
 // Brush teeth removed (maintenance marker, not a Nen restriction — moved to general quest)
 // RedTeam W_CLARITY reduced 15→10 (vow not yet established; revisit when 5+days/week)
 // Alcohol W_SPIRITUAL 0→5 (sobriety is a spiritual vow; redistributed from brush teeth)
 // Pre-Sleep Bonfire W_PLEASURE 0→5 (ritual completion reward signal; redistributed)
-const W_SPIRITUAL = [5, 45, 0, 0, 0, 5, 0, 15, 0, 0, 30, 0, 0, 0];
-const W_PHYSICAL  = [0, 0, 45, 0, 0, 0, 10, 15, 10, 5, 0, 10, 0, 5];
-const W_CLARITY   = [30, 0, 0, 20, 10, 10, 10, 0, 0, 0, 0, 0, 15, 5];
-const W_PLEASURE  = [30, 0, 0, 0, 0, 10, 0, 0, 0, 20, 35, 0, 5, 0];
+const W_SPIRITUAL = [5, 45, 0, 0, 0, 5, 0, 15, 0, 0, 30, 0, 0, 0, 0];
+const W_PHYSICAL  = [0, 0, 45, 0, 0, 0, 10, 15, 10, 5, 0, 10, 0, 5, 0];
+const W_CLARITY   = [28, 0, 0, 18, 8, 8, 8, 0, 0, 0, 0, 0, 15, 5, 10];
+const W_PLEASURE  = [30, 0, 0, 0, 0, 10, 0, 0, 0, 20, 35, 0, 5, 0, 0];
 
 function computeStat(states: boolean[], weights: number[]): number {
   return states.reduce((sum, st, i) => sum + (st && weights[i] ? weights[i] : 0), 0);

@@ -21,11 +21,12 @@
  *  4: Deep Work: RedTeam      11: Protein goal
  *  5: Deep Work: Artist       12: Pre-Sleep Bonfire Routine
  *  6: Deep Work: Mech Eng     13: DR-ALFRED Supplement Stack
+ * 14: Deep Work: Linguist
  */
 
 export const ACTION_ITEMS_LABELS: string[] = [
   'Abstained from undisciplined alcohol indulgence',        // 0
-  'Paladin Training (Wake Up With God)',                    // 1
+  'Paladin Training (Wake Up With God + Gratitude)',        // 1
   'Paladin Training (Physical Training)',                   // 2
   'Deep Work Progress — Web App Developer',                // 3
   'Deep Work Progress — RedTeam',                          // 4
@@ -38,6 +39,7 @@ export const ACTION_ITEMS_LABELS: string[] = [
   'Consumed trackable protein (0.64g/lb+ of total bodyweight per day)', // 11
   'Pre-Sleep Bonfire Routine',                              // 12
   'DR-ALFRED Supplement Stack (cognitive + physical + sleep stacks)', // 13
+  'Deep Work Progress — Linguist (Russian / Kinyarwanda, 20+ min)', // 14
 ];
 
 /** Derived count — never hardcode this number directly */
