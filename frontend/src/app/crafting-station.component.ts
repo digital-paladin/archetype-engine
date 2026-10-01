@@ -94,10 +94,11 @@ const RECIPES: Recipe[] = [
     requirements: [
       { icon: '🫙', label: 'Sawyer Squeeze filter + 2× 32oz Nalgene' },
       { icon: '💊', label: 'Aquatabs or Potable Aqua tabs (backup)' },
+      { icon: '🔥', label: 'Rolling boil, 1+ min (zero-gear fallback method)' },
       { icon: '📚', label: 'Solar still + seep well construction' },
     ],
     outputName: 'Hydration Protocol',
-    outputDesc: 'Multi-method water procurement. Never go thirsty — field or grid-down.',
+    outputDesc: 'Multi-method water procurement + purification (filter, chemical, boil). Never go thirsty — field or grid-down.',
     xpReward: 120, craftTime: '1 session',
   },
   {
