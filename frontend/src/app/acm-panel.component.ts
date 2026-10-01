@@ -42,10 +42,11 @@ interface BreakModalState {
 const ABSTINENCE_INDICES = new Set([0, 10]);
 
 const ITEM_LABELS = [
-  'Alcohol Sobriety', 'Wake Up With God', 'Physical Training',
+  'Alcohol Sobriety', 'Wake Up + Gratitude', 'Physical Training',
   'Deep Work: Dev',   'Deep Work: RedTeam', 'Deep Work: Artist',
   'Deep Work: Mech',  'Fasting',            'Hydration',          'Diet Discipline',
   'Sexual Sobriety',  'Protein Goal',       'Bonfire Routine',    'Supplements',
+  'Deep Work: Linguist',
 ];
 
 const STAT_META = [

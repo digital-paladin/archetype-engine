@@ -51,8 +51,8 @@ interface VaultResponse {
 // Index = journal action item (0-based)
 // Weight-2: 0=alcohol, 1=prayer, 2=training, 3=dev, 4=redteam, 10=sexual, 13=bonfire
 // Weight-1: 5=artist, 6=mech_eng, 7=fasting, 8=hydration, 9=diet, 11=teeth, 12=protein, 14=supplements
-const ACM_ITEM_WEIGHTS = [2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 2, 1, 2, 1];
-const ACM_MAX_SCORE    = ACM_ITEM_WEIGHTS.reduce((a, b) => a + b, 0); // 20
+const ACM_ITEM_WEIGHTS = [2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 2, 1, 2, 1, 1];
+const ACM_MAX_SCORE    = ACM_ITEM_WEIGHTS.reduce((a, b) => a + b, 0); // 21
 
 function computeAcmWeightedScore(itemStates: boolean[]): number {
   return itemStates.reduce((sum, checked, i) => sum + (checked ? ACM_ITEM_WEIGHTS[i] : 0), 0);
