@@ -12,6 +12,7 @@ import { WillpowerService }               from './willpower.service';
 import { ALL_SKILLS, SKILL_BARS, COMBOS, SKILL_MAP, Skill, SkillBar, ExerciseSet, ComboDefinition } from './skill-tree.data';
 import { SKILL_ICON_SRC } from './skill-icon.data';
 import { environment } from '../environments/environment';
+import { HotbarSessionService } from './hotbar-session.service';
 
 /** Emitted to the parent (ability-hotbar) when a non-exercise skill is chosen. */
 export interface SkillActivateEvent {
@@ -120,6 +121,9 @@ interface SetEntry {
 
         <!-- Label -->
         <span class="slot-label">{{ getSkill(skillId)?.name ?? skillId }}</span>
+
+        <!-- Session count badge -->
+        <span class="slot-count-badge" *ngIf="sessionCount(skillId) > 0">×{{ sessionCount(skillId) }}</span>
 
         <!-- WP badge -->
         <span class="slot-wp-cost"  *ngIf="(getSkill(skillId)?.willpowerCost  ?? 0) > 0">
@@ -434,6 +438,15 @@ interface SetEntry {
       color: rgba(111,180,207,0.65);
     }
 
+    /* Count badge */
+    .slot-count-badge {
+      position: absolute;
+      bottom: 6px; right: 2px;
+      font-size: 10px;
+      color: rgba(242,201,106,0.95);
+      pointer-events: none;
+    }
+
     @keyframes skill-pulse {
       0%,100% { box-shadow: 0 0 10px rgba(201,168,76,0.35), 0 0 0 1px rgba(0,0,0,0.6), inset 0 0 8px rgba(201,168,76,0.08); }
       50%      { box-shadow: 0 0 24px rgba(201,168,76,0.60), 0 0 0 1px rgba(0,0,0,0.6), inset 0 0 16px rgba(201,168,76,0.18); }
@@ -496,6 +509,7 @@ export class SkillBarSwitcherComponent implements OnInit, OnDestroy {
   private readonly unlock = inject(SkillUnlockService);
   private readonly wp     = inject(WillpowerService);
   private readonly http   = inject(HttpClient);
+  private readonly hotbar = inject(HotbarSessionService);
 
   // ── State ───────────────────────────────────────────────────────────────
   protected readonly allBars = SKILL_BARS;
@@ -527,6 +541,12 @@ export class SkillBarSwitcherComponent implements OnInit, OnDestroy {
 
   protected getSkill(skillId: string): Skill | undefined {
     return SKILL_MAP.get(skillId);
+  }
+
+  protected sessionCount(skillId: string): number {
+    const skill = this.getSkill(skillId);
+    if (!skill) return 0;
+    return this.hotbar.getCount(skillId, skill.category);
   }
 
   protected getIconSrc(skillId: string): string | undefined {
