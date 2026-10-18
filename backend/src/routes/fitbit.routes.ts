@@ -1,12 +1,50 @@
 import { Router, Request, Response } from 'express';
 import { getDataService } from '../services/data/dataService';
 import { FitbitService } from '../services/fitbit.service';
+import { GoogleHealthService } from '../services/googleHealth.service';
 import { authMiddleware } from '../middleware/auth.middleware';
 import { caughtErrorMessage } from '../utils/caughtError';
 import { syncSleepDebtFromJournalSafe } from '../services/sleepDebt.service';
+import {
+  fitbitDataSourceMode,
+  resolveDailyProvider,
+  WearableSourceError,
+} from '../services/fitbitDataSource';
 
 const router = Router();
 const fitbitService = new FitbitService();
+const googleHealth = new GoogleHealthService();
+
+function sendSourceError(res: Response, err: WearableSourceError) {
+  const body: { success: false; error: string; requiresAuth?: boolean } = {
+    success: false,
+    error: err.message,
+  };
+  if (err.requiresAuth) {
+    body.requiresAuth = true;
+    return res.json(body);
+  }
+  return res.status(err.httpStatus).json(body);
+}
+
+function sendFetchError(res: Response, err: unknown) {
+  const msg = caughtErrorMessage(err);
+  if (msg.includes('403')) {
+    const authPath = msg.toLowerCase().includes('google')
+      ? '/api/google-health/connect-url'
+      : '/api/fitbit/auth';
+    return res.json({
+      success: false,
+      error: `Wearable scope not authorized. Re-authorize at ${authPath}.`,
+      requiresAuth: true,
+    });
+  }
+  return res.status(500).json({ success: false, error: msg });
+}
+
+async function dailyProvider(userId: string): Promise<'google' | 'fitbit'> {
+  return resolveDailyProvider(userId, googleHealth, fitbitService);
+}
 
 // GET /api/fitbit/auth — UNPROTECTED: initiate OAuth flow (user visits in browser)
 router.get('/auth', (req: Request, res: Response) => {
@@ -56,10 +94,21 @@ router.get('/callback', async (req: Request, res: Response) => {
 });
 
 // GET /api/fitbit/status — check if Fitbit is configured + authorized (PROTECTED)
-router.get('/status', authMiddleware, (req: Request, res: Response) => {
+router.get('/status', authMiddleware, async (req: Request, res: Response) => {
+  const userId = (req as any).userId as string;
+  const mode = fitbitDataSourceMode();
+  let provider: 'google' | 'fitbit' | null = null;
+  try {
+    provider = await dailyProvider(userId);
+  } catch {
+    provider = null;
+  }
   res.json({
-    configured: fitbitService.isConfigured(),
-    authUrl:    fitbitService.isConfigured() ? '/api/fitbit/auth' : null,
+    configured: fitbitService.isConfigured() || googleHealth.isConfigured(),
+    dataSource: mode,
+    provider,
+    authUrl: fitbitService.isConfigured() ? '/api/fitbit/auth' : null,
+    googleAuthUrl: googleHealth.isConfigured() ? '/api/google-health/connect-url' : null,
   });
 });
 
@@ -67,14 +116,8 @@ router.get('/status', authMiddleware, (req: Request, res: Response) => {
 router.get('/sleep/today', authMiddleware, async (req: Request, res: Response) => {
   console.log('\n[FITBIT] ═════════════════════════════════════════');
   console.log(`[FITBIT] /sleep/today called at ${new Date().toISOString()}`);
-  console.log(`[FITBIT] Configured: ${fitbitService.isConfigured()}`);
+  console.log(`[FITBIT] Data source: ${fitbitDataSourceMode()} (legacy configured=${fitbitService.isConfigured()} google configured=${googleHealth.isConfigured()})`);
   console.log('[FITBIT] ─────────────────────────────────────────');
-
-  if (!fitbitService.isConfigured()) {
-    console.warn('[FITBIT] ⚠ FITBIT_CLIENT_ID or FITBIT_CLIENT_SECRET not set in environment');
-    console.log('[FITBIT] ═════════════════════════════════════════\n');
-    return res.status(503).json({ success: false, error: 'Fitbit not configured. Set FITBIT_CLIENT_ID and FITBIT_CLIENT_SECRET.' });
-  }
 
   const clientDate = typeof req.query.date === 'string' ? req.query.date : undefined;
   const userId = (req as any).userId as string;
@@ -109,10 +152,20 @@ router.get('/sleep/today', authMiddleware, async (req: Request, res: Response) =
     console.warn(`[FITBIT] DB cache read failed (non-fatal): ${err instanceof Error ? err.message : err}`);
   }
 
-  // Fetch from Fitbit
+  // Fetch from Google Health when that account is connected, else legacy Fitbit.
+  let provider: 'google' | 'fitbit';
   try {
-    console.log('[FITBIT] Calling Fitbit API...');
-    const sleep = await fitbitService.getSleepData(clientDate ?? 'today', userId);
+    provider = await dailyProvider(userId);
+  } catch (err) {
+    if (err instanceof WearableSourceError) return sendSourceError(res, err);
+    throw err;
+  }
+
+  try {
+    console.log(`[FITBIT] Calling ${provider} sleep API...`);
+    const sleep = provider === 'google'
+      ? await googleHealth.getSleepData(clientDate ?? 'today', userId)
+      : await fitbitService.getSleepData(clientDate ?? 'today', userId);
     console.log('[FITBIT] ✅ Fitbit API call succeeded');
     console.log(`[FITBIT]   score    : ${sleep.score} / 100`);
     console.log(`[FITBIT]   hours    : ${sleep.hours} hrs`);
@@ -143,36 +196,36 @@ router.get('/sleep/today', authMiddleware, async (req: Request, res: Response) =
     }
 
     console.log('[FITBIT] ═════════════════════════════════════════\n');
-    res.json({ success: true, sleep, source: 'fitbit' });
+    res.json({ success: true, sleep, source: provider === 'google' ? 'google-health' : 'fitbit' });
   } catch (err) {
     const msg = caughtErrorMessage(err);
     console.error(`[FITBIT] ❌ Sleep fetch failed: ${msg}`);
     if (err instanceof Error && err.stack) console.error(`[FITBIT] Stack: ${err.stack}`);
     console.log('[FITBIT] ═════════════════════════════════════════\n');
-    if (msg.includes('403')) {
-      return res.json({ success: false, error: 'Fitbit sleep scope not authorized. Re-authorize at /api/fitbit/auth to grant sleep permissions.', requiresAuth: true });
-    }
-    res.status(500).json({ success: false, error: msg });
+    return sendFetchError(res, err);
   }
 });
 
 // GET /api/fitbit/sleep/week — last 7 nights of sleep data (PROTECTED)
 router.get('/sleep/week', authMiddleware, async (req: Request, res: Response) => {
   console.log('\n[FITBIT] ═══ /sleep/week ════════════════════════');
-  if (!fitbitService.isConfigured()) {
-    console.warn('[FITBIT] ⚠ Fitbit not configured');
-    console.log('[FITBIT] ═══════════════════════════════════════\n');
-    return res.status(503).json({ success: false, error: 'Fitbit not configured' });
-  }
-
   const userId = (req as any).userId as string;
+  let provider: 'google' | 'fitbit';
+  try {
+    provider = await dailyProvider(userId);
+  } catch (err) {
+    if (err instanceof WearableSourceError) return sendSourceError(res, err);
+    throw err;
+  }
   const days: Array<{ date: string; score: number; hours: number; vitality: number; efficiency: number; deep_min: number; rem_min: number; light_min: number; awake_min: number }> = [];
 
   for (let i = 0; i < 7; i++) {
     const d = new Date(Date.now() - i * 86_400_000);
     const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     try {
-      const sleep = await fitbitService.getSleepData(dateStr, userId);
+      const sleep = provider === 'google'
+        ? await googleHealth.getSleepData(dateStr, userId)
+        : await fitbitService.getSleepData(dateStr, userId);
       days.push({ date: dateStr, ...sleep });
       console.log(`[FITBIT]   ${dateStr}: ${sleep.hours}hrs score=${sleep.score} vitality=${sleep.vitality}`);
       if (sleep.hours > 0) {
@@ -198,21 +251,25 @@ router.get('/sleep/week', authMiddleware, async (req: Request, res: Response) =>
   console.log(`[FITBIT] Returning ${days.length} days (most recent first)`);
   console.log('[FITBIT] ═══════════════════════════════════════\n');
   await syncSleepDebtFromJournalSafe(userId);
-  res.json({ success: true, days });
+  res.json({ success: true, days, source: provider === 'google' ? 'google-health' : 'fitbit' });
 });
 
 // GET /api/fitbit/activities/today — auto-detected physical activities + step summary (PROTECTED)
 router.get('/activities/today', authMiddleware, async (req: Request, res: Response) => {
   console.log('\n[FITBIT] ═══ /activities/today ══════════════════');
-  if (!fitbitService.isConfigured()) {
-    console.warn('[FITBIT] ⚠ Fitbit not configured');
-    console.log('[FITBIT] ═══════════════════════════════════════\n');
-    return res.status(503).json({ success: false, error: 'Fitbit not configured' });
-  }
   const clientDate = typeof req.query.date === 'string' ? req.query.date : undefined;
+  const userId = (req as any).userId as string;
+  let provider: 'google' | 'fitbit';
   try {
-    const userId = (req as any).userId as string;
-    const data = await fitbitService.getActivities(clientDate ?? 'today', userId);
+    provider = await dailyProvider(userId);
+  } catch (err) {
+    if (err instanceof WearableSourceError) return sendSourceError(res, err);
+    throw err;
+  }
+  try {
+    const data = provider === 'google'
+      ? await googleHealth.getActivities(clientDate ?? 'today', userId)
+      : await fitbitService.getActivities(clientDate ?? 'today', userId);
     console.log(`[FITBIT] ✅ Activities fetched: ${data.activities.length} logged, ${data.steps} steps`);
 
     // Write logged workouts to Warrior quest entries (non-fatal, only if field is empty)
@@ -237,15 +294,12 @@ router.get('/activities/today', authMiddleware, async (req: Request, res: Respon
     }
 
     console.log('[FITBIT] ═══════════════════════════════════════\n');
-    res.json({ success: true, ...data });
+    res.json({ success: true, source: provider === 'google' ? 'google-health' : 'fitbit', ...data });
   } catch (err) {
     const msg = caughtErrorMessage(err);
     console.error(`[FITBIT] ❌ Activities fetch failed: ${msg}`);
     console.log('[FITBIT] ═══════════════════════════════════════\n');
-    if (msg.includes('403')) {
-      return res.json({ success: false, error: 'Fitbit activity scope not authorized. Re-authorize at /api/fitbit/auth.', requiresAuth: true });
-    }
-    res.status(500).json({ success: false, error: msg });
+    return sendFetchError(res, err);
   }
 });
 
@@ -253,13 +307,18 @@ router.get('/activities/today', authMiddleware, async (req: Request, res: Respon
 router.get('/nutrition/today', authMiddleware, async (req: Request, res: Response) => {
   const clientDate = typeof req.query.date === 'string' ? req.query.date : undefined;
   console.log(`\n[FITBIT] ═══ /nutrition/today ═══════════════════ (date=${clientDate ?? 'server-UTC'})`);
-  if (!fitbitService.isConfigured()) {
-    console.warn('[FITBIT] ⚠ Fitbit not configured');
-    return res.status(503).json({ success: false, error: 'Fitbit not configured' });
+  const userId = (req as any).userId as string;
+  let provider: 'google' | 'fitbit';
+  try {
+    provider = await dailyProvider(userId);
+  } catch (err) {
+    if (err instanceof WearableSourceError) return sendSourceError(res, err);
+    throw err;
   }
   try {
-    const userId  = (req as any).userId as string;
-    const data = await fitbitService.getFoodLog(clientDate ?? 'today', userId);
+    const data = provider === 'google'
+      ? await googleHealth.getFoodLog(clientDate ?? 'today', userId)
+      : await fitbitService.getFoodLog(clientDate ?? 'today', userId);
     console.log(`[FITBIT] \u2705 Food log fetched: ${data.entries.length} entries, ${data.totals.protein}g protein`);
     // Persist nutrition totals to Supabase (non-fatal)
     try {
@@ -274,29 +333,31 @@ router.get('/nutrition/today', authMiddleware, async (req: Request, res: Respons
       console.warn(`[FITBIT] DB nutrition write failed (non-fatal): ${dbErr instanceof Error ? dbErr.message : dbErr}`);
     }
     console.log('[FITBIT] ═══════════════════════════════════════\n');
-    res.json({ success: true, ...data });
+    res.json({ success: true, source: provider === 'google' ? 'google-health' : 'fitbit', ...data });
   } catch (err) {
     const msg = caughtErrorMessage(err);
     console.error(`[FITBIT] ❌ Food log fetch failed: ${msg}`);
     console.log('[FITBIT] ═══════════════════════════════════════\n');
-    if (msg.includes('403')) {
-      return res.json({ success: false, error: 'Fitbit nutrition scope not authorized. Re-authorize at /api/fitbit/auth.', requiresAuth: true });
-    }
-    res.status(500).json({ success: false, error: msg });
+    return sendFetchError(res, err);
   }
 });
 
 router.get('/vitals/today', authMiddleware, async (req, res) => {
   console.log('[FITBIT] ═══════════════════════════════════════');
   console.log('[FITBIT] GET /api/fitbit/vitals/today');
-  if (!fitbitService.isConfigured()) {
-    console.warn('[FITBIT] ⚠ Fitbit not configured');
-    return res.status(503).json({ success: false, error: 'Fitbit not configured' });
-  }
   const clientDate = typeof req.query.date === 'string' ? req.query.date : undefined;
+  const userId = (req as any).userId as string;
+  let provider: 'google' | 'fitbit';
   try {
-    const userId  = (req as any).userId as string;
-    const vitals = await fitbitService.getVitals(userId, clientDate);
+    provider = await dailyProvider(userId);
+  } catch (err) {
+    if (err instanceof WearableSourceError) return sendSourceError(res, err);
+    throw err;
+  }
+  try {
+    const vitals = provider === 'google'
+      ? await googleHealth.getVitals(userId, clientDate)
+      : await fitbitService.getVitals(userId, clientDate);
     console.log('[FITBIT] \u2705 Vitals fetched successfully');
     if (vitals.waterOz != null) {
       console.log(`[FITBIT] Hydration logged: ${vitals.waterOz} oz \u2014 persisting to DB...`);
@@ -312,12 +373,12 @@ router.get('/vitals/today', authMiddleware, async (req, res) => {
       console.log('[FITBIT] No hydration data returned from Fitbit — skipping journal write');
     }
     console.log('[FITBIT] ═══════════════════════════════════════\n');
-    res.json({ success: true, ...vitals });
+    res.json({ success: true, source: provider === 'google' ? 'google-health' : 'fitbit', ...vitals });
   } catch (err) {
     const msg = caughtErrorMessage(err);
     console.error(`[FITBIT] ❌ Vitals fetch failed: ${msg}`);
     console.log('[FITBIT] ═══════════════════════════════════════\n');
-    res.status(500).json({ success: false, error: msg });
+    return sendFetchError(res, err);
   }
 });
 

@@ -39,6 +39,7 @@ import { requireTier } from './middleware/requireTier.middleware';
 import { FitbitService } from './services/fitbit.service';
 import { OuraService } from './services/oura.service';
 import { GoogleHealthService } from './services/googleHealth.service';
+import { allowsGoogleHealthReads, allowsLegacyFitbitReads } from './services/fitbitDataSource';
 import { getDataService } from './services/data/dataService';
 import { runDailyIncrement } from './services/abstinence.service';
 import { syncSleepDebtFromJournalSafe } from './services/sleepDebt.service';
@@ -245,12 +246,12 @@ httpServer.listen(PORT_NUMBER, '0.0.0.0', () => {
         score = sleep.score;
         hours = sleep.hours;
         provider = 'oura';
-      } else if (googleHealthCron.isConfigured() && await googleHealthCron.hasTokens(ownerUserId)) {
+      } else if (allowsGoogleHealthReads() && googleHealthCron.isConfigured() && await googleHealthCron.hasTokens(ownerUserId)) {
         const sleep = await googleHealthCron.getSleepData('today', ownerUserId);
         score = sleep.score;
         hours = sleep.hours;
         provider = 'google';
-      } else if (fitbitCronService.isConfigured()) {
+      } else if (allowsLegacyFitbitReads() && fitbitCronService.isConfigured()) {
         const sleep = await fitbitCronService.getSleepData('today', ownerUserId);
         score = sleep.score;
         hours = sleep.hours;

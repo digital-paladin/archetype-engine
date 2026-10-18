@@ -12,6 +12,7 @@ import {
   missingSleepDates,
 } from '../services/sleepHistoryCalendar';
 import { syncSleepDebtFromJournalSafe } from '../services/sleepDebt.service';
+import { allowsGoogleHealthReads, allowsLegacyFitbitReads } from '../services/fitbitDataSource';
 
 const router = Router();
 const db = getDataService();
@@ -48,7 +49,7 @@ async function backfillWearableSleep(
   }
 
   try {
-    if (googleHealth.isConfigured() && await googleHealth.hasTokens(userId)) {
+    if (allowsGoogleHealthReads() && googleHealth.isConfigured() && await googleHealth.hasTokens(userId)) {
       const nights: Array<{ date: string; hours: number; score: number }> = [];
       for (const date of missing) {
         try {
@@ -63,7 +64,7 @@ async function backfillWearableSleep(
   }
 
   try {
-    if (fitbit.isConfigured()) {
+    if (allowsLegacyFitbitReads() && fitbit.isConfigured()) {
       const range = await fitbit.getSleepRange(fromDate, toDate, userId);
       return range
         .filter(n => missingSet.has(n.date) && n.hours > 0)

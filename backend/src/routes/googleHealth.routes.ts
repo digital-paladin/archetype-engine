@@ -1,5 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { GoogleHealthService } from '../services/googleHealth.service';
+import { GOOGLE_HEALTH_READONLY_SCOPES } from '../services/googleHealthParse';
+import { fitbitDataSourceMode } from '../services/fitbitDataSource';
 import { authMiddleware } from '../middleware/auth.middleware';
 
 const router = Router();
@@ -73,6 +75,10 @@ router.get('/status', authMiddleware, async (req: Request, res: Response) => {
     provider: 'google',
     configured: googleHealth.isConfigured(),
     connected,
+    dataSource: fitbitDataSourceMode(),
+    // These scopes are Restricted. See MIGRATION.md before requesting them in production.
+    scopes: GOOGLE_HEALTH_READONLY_SCOPES,
+    restrictedScopes: true,
   });
 });
 
