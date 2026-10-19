@@ -5,6 +5,17 @@ import { pushLog, getLogs } from '../services/activityLogStore';
 import { recordActivitySession, applyCourageFlag } from '../services/courage.service';
 import { getDataService } from '../services/data/dataService';
 import { getActiveBodyStatuses } from '../services/bodyStatus.service';
+import {
+  isRecoveryQuestType, validateRecoveryActivity, localDate, CLAIM_DATE_TAG,
+  isRealIsoDate, mergeActivityLogs,
+} from '../services/recoveryQuests.service';
+
+/**
+ * Recent activity_log window used to see training logged on a claimed day.
+ * One-time recovery rows are loaded in full via getActivitiesByTypePrefix,
+ * so an old X-ray step is still visible after this window scrolls off.
+ */
+const RECOVERY_LOG_LOOKBACK = 2000;
 
 const router = Router();
 
@@ -54,7 +65,7 @@ export function setSocketIO(socketInstance: SocketIOServer) {
  */
 router.post('/', async (req: Request, res: Response) => {
   try {
-    const { activityType, duration, notes, xp: clientXp, clientDate, courageFlag, courageNote } = req.body;
+    const { activityType, duration, notes: rawNotes, xp: clientXp, clientDate, courageFlag, courageNote } = req.body;
     console.log(`[ACTIVITY] POST /api/activities — type=${activityType} duration=${duration ?? '—'}min xp=${clientXp ?? 'auto'} date=${clientDate ?? 'server'} courageFlag=${!!courageFlag}`);
 
     // Validate required fields
@@ -64,13 +75,52 @@ router.post('/', async (req: Request, res: Response) => {
       });
     }
 
+    const userId = (req as any).userId as string | undefined;
+
+    // ── Recovery & Consistency quests: server-validated, flat server XP ──────
+    const isRecovery = isRecoveryQuestType(activityType);
+    let notes = rawNotes;
+    if (isRecovery) {
+      if (!userId) {
+        return res.status(401).json({ error: 'Recovery quests require a signed-in user' });
+      }
+      // A provided clientDate that isn't a real day must not fall through to
+      // "today" — 2026-09-31 overflows onto a Thursday and would farm Rest Day Kept.
+      const providedDate = typeof clientDate === 'string' ? clientDate.trim() : undefined;
+      let claimDate: string;
+      if (providedDate === undefined || providedDate === '') {
+        claimDate = localDate(new Date().toISOString());
+      } else if (isRealIsoDate(providedDate)) {
+        claimDate = providedDate;
+      } else {
+        return res.status(409).json({
+          error: 'Claim date must be a real calendar day (YYYY-MM-DD)',
+          activityType,
+        });
+      }
+      const db = getDataService();
+      const [recent, recoveryHistory] = await Promise.all([
+        db.getActivityLog(userId, RECOVERY_LOG_LOOKBACK),
+        db.getActivitiesByTypePrefix(userId, 'recovery-'),
+      ]);
+      const log = mergeActivityLogs(recoveryHistory, recent);
+      const check = validateRecoveryActivity(activityType, claimDate, log);
+      if (!check.ok) {
+        console.log(`[ACTIVITY] Recovery quest rejected — ${activityType} ${claimDate}: ${check.reason}`);
+        return res.status(409).json({ error: check.reason, activityType, date: claimDate });
+      }
+      const userNotes = typeof rawNotes === 'string' ? rawNotes.trim() : '';
+      notes = userNotes ? `${CLAIM_DATE_TAG(claimDate)} ${userNotes}` : CLAIM_DATE_TAG(claimDate);
+    }
+
     // Compute per-class XP breakdown (multi-class activities award XP to several classes).
     const xpAwards = xpCalculator.getMultiClassXP(activityType, duration);
     const totalServerXp = xpAwards.reduce((s, a) => s + a.xp, 0);
 
     // Use client-supplied XP when provided (frontend has the authoritative calculation);
-    // fall back to server-side estimate for legacy/manual calls.
-    const rawXp = (typeof clientXp === 'number' && clientXp > 0)
+    // fall back to server-side estimate for legacy/manual calls. Recovery quests
+    // always use the server's flat values so they can't be inflated client-side.
+    const rawXp = (!isRecovery && typeof clientXp === 'number' && clientXp > 0)
       ? Math.round(clientXp)
       : totalServerXp;
     const category = xpCalculator.getCategoryFromActivity(activityType);
@@ -93,7 +143,6 @@ router.post('/', async (req: Request, res: Response) => {
     // xp_penalty among statuses whose impacts_actions includes this activityType — highest wins,
     // not cumulative, matching the frontend's own rule. Applied here, before both persistence and
     // the response, so the DB value and what the client sees never drift apart. ──
-    const userId = (req as any).userId as string | undefined;
     let xpPenaltyPct = 0;
     if (userId) {
       try {
