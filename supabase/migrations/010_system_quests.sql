@@ -3,7 +3,7 @@
 -- policies keep the anon key from reading another hunter's quests.
 --
 -- Apply in the Supabase SQL editor, or:
---   node backend/scripts/apply-migration.js supabase/migrations/009_system_quests.sql
+--   node backend/scripts/apply-migration.js supabase/migrations/010_system_quests.sql
 
 CREATE TABLE IF NOT EXISTS system_quests (
   id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),

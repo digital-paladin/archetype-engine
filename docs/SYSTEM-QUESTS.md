@@ -8,17 +8,17 @@ Player sessions (login token or the personal API key from `GET /api/auth/api-key
 
 No new Railway environment variables. The API uses the Supabase keys already set on the backend (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY`).
 
-Apply the migration to that same Supabase project before the bot calls the API:
+Apply the migration to that same Supabase project before the bot calls the API. The file is `010_system_quests.sql` because open PR #19 already uses `009_scheduled_indulgences.sql`. PRs #20–#25 do not add a migration.
 
 1. Open the Supabase SQL editor for the project Railway uses.
-2. Paste and run [`supabase/migrations/009_system_quests.sql`](../supabase/migrations/009_system_quests.sql).
+2. Paste and run [`supabase/migrations/010_system_quests.sql`](../supabase/migrations/010_system_quests.sql).
 
 That creates `system_quests`, `system_messages`, and `service_credentials` (RLS on, service role bypasses it).
 
 Alternatively, from a machine that has `DATABASE_URL` in `backend/.env`:
 
 ```bash
-node backend/scripts/apply-migration.js supabase/migrations/009_system_quests.sql
+node backend/scripts/apply-migration.js supabase/migrations/010_system_quests.sql
 ```
 
 Deploy this branch (Paul merges; do not push to `main`). The process then sweeps deadlines every minute.
