@@ -271,6 +271,17 @@ const NAV_TABS: { id: PanelId; icon: string; label: string }[] = [
           <!-- ── Character Panel (default) ── -->
           <ng-container *ngIf="activePanel() === 'character'">
 
+            <!-- Quick Log sits first on the default tab so recovery quests are reachable
+                 without another panel. The card uses the existing panel chrome; the form
+                 itself is full-width and stacks on a phone. -->
+            <section class="eso-panel" id="quick-log-panel">
+              <h3 class="eso-panel-title">Quick Log</h3>
+              <app-quick-log
+                [xpMultiplier]="totalXpMultiplier()"
+                (logged)="onActivityLogged($event)">
+              </app-quick-log>
+            </section>
+
             <!-- Character Stats Panel -->
             <app-character-stats-panel></app-character-stats-panel>
 
@@ -336,8 +347,6 @@ const NAV_TABS: { id: PanelId; icon: string; label: string }[] = [
 
             <!-- Collections (Titles, Trophies & Armor) -->
             <app-collections-panel></app-collections-panel>
-
-            <!-- Log Activity section removed — logging is done via Quest Activities and ACL -->
 
           </ng-container>
 

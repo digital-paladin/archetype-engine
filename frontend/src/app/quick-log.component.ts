@@ -258,6 +258,12 @@ interface ActivityType {
       border: 1px solid rgba(160,28,28,0.40);
       color: #ff8080;
     }
+
+    /* Phone: 16px fields avoid focus-zoom; 44px targets match the rest of the mobile UI. */
+    @media (max-width: 600px) {
+      select, input, textarea { font-size: 16px; }
+      button { min-height: 44px; }
+    }
   `]
 })
 export class QuickLogComponent {
