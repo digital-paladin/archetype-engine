@@ -143,6 +143,50 @@ describe('google health parsers', () => {
     ]);
   });
 
+  it('prefers activity-level reconcile minutes over the active-minutes rollup', () => {
+    const summary = assembleActivitySummary({
+      activeMinutesRollup: {
+        activeMinutes: {
+          activeMinutesRollupByActivityLevel: [
+            { activityLevel: 'LIGHT', activeMinutesSum: '5' },
+            { activityLevel: 'MODERATE', activeMinutesSum: '5' },
+            { activityLevel: 'VIGOROUS', activeMinutesSum: '5' },
+          ],
+        },
+      },
+      sedentaryRollup: { sedentaryPeriod: { durationSum: '100s' } },
+      activityLevelPoints: [
+        {
+          activityLevel: {
+            interval: { startTime: '2026-10-18T12:00:00Z', endTime: '2026-10-18T12:40:00Z' },
+            activityLevelType: 'LIGHTLY_ACTIVE',
+          },
+        },
+        {
+          activityLevel: {
+            interval: { startTime: '2026-10-18T13:00:00Z', endTime: '2026-10-18T13:22:00Z' },
+            activityLevelType: 'MODERATELY_ACTIVE',
+          },
+        },
+        {
+          activityLevel: {
+            interval: { startTime: '2026-10-18T14:00:00Z', endTime: '2026-10-18T14:15:00Z' },
+            activityLevelType: 'VERY_ACTIVE',
+          },
+        },
+        {
+          activityLevel: {
+            interval: { startTime: '2026-10-18T00:00:00Z', endTime: '2026-10-18T08:00:00Z' },
+            activityLevelType: 'SEDENTARY',
+          },
+        },
+      ],
+    });
+    expect(summary.lightlyActiveMinutes).toBe(40);
+    expect(summary.activeMinutes).toBe(37);
+    expect(summary.sedentaryMinutes).toBe(480);
+  });
+
   it('builds a food log and prefers rollup totals for the protein journal write', () => {
     const log = assembleFoodLog({
       points: [{

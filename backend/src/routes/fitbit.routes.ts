@@ -7,6 +7,7 @@ import { caughtErrorMessage } from '../utils/caughtError';
 import { syncSleepDebtFromJournalSafe } from '../services/sleepDebt.service';
 import {
   fitbitDataSourceMode,
+  legacyFitbitRetired,
   resolveDailyProvider,
   WearableSourceError,
 } from '../services/fitbitDataSource';
@@ -55,7 +56,10 @@ router.get('/auth', (req: Request, res: Response) => {
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Auth setup failed';
     console.error(`[FITBIT] Auth URL error: ${msg}`);
-    res.status(500).send(`<h1>❌ Fitbit Not Configured</h1><p>${msg}</p>`);
+    const shutDown = msg.includes('shut down');
+    const status = shutDown ? 503 : 500;
+    const title = shutDown ? 'Fitbit Web API shut down' : 'Fitbit Not Configured';
+    res.status(status).send(`<h1>❌ ${title}</h1><p>${msg}</p>`);
   }
 });
 
@@ -89,7 +93,8 @@ router.get('/callback', async (req: Request, res: Response) => {
   } catch (err) {
     const msg = caughtErrorMessage(err);
     console.error(`[FITBIT] Code exchange failed: ${msg}`);
-    res.status(500).send(`<h1>❌ Auth Failed</h1><p>${msg}</p>`);
+    const shutDown = msg.includes('shut down');
+    res.status(shutDown ? 503 : 500).send(`<h1>❌ Auth Failed</h1><p>${msg}</p>`);
   }
 });
 
@@ -107,7 +112,7 @@ router.get('/status', authMiddleware, async (req: Request, res: Response) => {
     configured: fitbitService.isConfigured() || googleHealth.isConfigured(),
     dataSource: mode,
     provider,
-    authUrl: fitbitService.isConfigured() ? '/api/fitbit/auth' : null,
+    authUrl: !legacyFitbitRetired() && fitbitService.isConfigured() ? '/api/fitbit/auth' : null,
     googleAuthUrl: googleHealth.isConfigured() ? '/api/google-health/connect-url' : null,
   });
 });

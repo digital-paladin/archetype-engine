@@ -75,6 +75,10 @@ interface DataPoint {
   dailyRespiratoryRate?: { date?: CivilDate; breathsPerMinute?: number };
   height?: { sampleTime?: { physicalTime?: string }; heightMillimeters?: string | number };
   weight?: { sampleTime?: { physicalTime?: string }; weightGrams?: number };
+  activityLevel?: {
+    interval?: { startTime?: string; endTime?: string };
+    activityLevelType?: string;
+  };
 }
 
 interface ExerciseSession {
@@ -127,6 +131,8 @@ export interface GoogleActivityParts {
   restingPoints?: DataPoint[];
   zoneThresholdPoints?: DataPoint[];
   exercisePoints?: DataPoint[];
+  /** Reconciled `activity-level` points. Preferred over `active-minutes` when any bucket has duration. */
+  activityLevelPoints?: DataPoint[];
   date?: string;
 }
 
@@ -338,20 +344,62 @@ function pickMainSleep(sessions: SleepSession[], dateStr: string): SleepSession 
   ));
 }
 
-export function assembleActivitySummary(parts: GoogleActivityParts): ActivitySummary {
-  const steps = Math.round(asNumber(parts.stepsRollup?.steps?.countSum));
-  let light = 0, moderate = 0, vigorous = 0;
-  for (const row of parts.activeMinutesRollup?.activeMinutes?.activeMinutesRollupByActivityLevel ?? []) {
-    const minutes = asNumber(row.activeMinutesSum);
-    switch (row.activityLevel) {
-      case 'LIGHT': light += minutes; break;
-      case 'MODERATE': moderate += minutes; break;
-      case 'VIGOROUS': vigorous += minutes; break;
+interface ActivityLevelMinutes {
+  light: number;
+  moderate: number;
+  vigorous: number;
+  sedentary: number;
+}
+
+/**
+ * Fitbit lightly / fairly / very active minutes map to activity-level
+ * LIGHTLY_ACTIVE / MODERATELY_ACTIVE / VERY_ACTIVE. That data type is
+ * reconcile-only, so callers pass the points rather than a daily rollup.
+ */
+function activityLevelMinutes(points: DataPoint[] | undefined): ActivityLevelMinutes | null {
+  let light = 0, moderate = 0, vigorous = 0, sedentary = 0, seen = false;
+  for (const point of points ?? []) {
+    const level = point.activityLevel;
+    if (!level?.activityLevelType) continue;
+    const minutes = minutesBetween(level.interval?.startTime, level.interval?.endTime);
+    if (minutes <= 0) continue;
+    seen = true;
+    switch (level.activityLevelType) {
+      case 'LIGHTLY_ACTIVE': light += minutes; break;
+      case 'MODERATELY_ACTIVE': moderate += minutes; break;
+      case 'VERY_ACTIVE': vigorous += minutes; break;
+      case 'SEDENTARY': sedentary += minutes; break;
       default: break;
     }
   }
+  if (!seen) return null;
+  return { light, moderate, vigorous, sedentary };
+}
 
-  const sedentaryMin = Math.round(durationToMinutes(parts.sedentaryRollup?.sedentaryPeriod?.durationSum));
+export function assembleActivitySummary(parts: GoogleActivityParts): ActivitySummary {
+  const steps = Math.round(asNumber(parts.stepsRollup?.steps?.countSum));
+  let light = 0, moderate = 0, vigorous = 0;
+  const fromLevels = activityLevelMinutes(parts.activityLevelPoints);
+  if (fromLevels) {
+    light = fromLevels.light;
+    moderate = fromLevels.moderate;
+    vigorous = fromLevels.vigorous;
+  } else {
+    for (const row of parts.activeMinutesRollup?.activeMinutes?.activeMinutesRollupByActivityLevel ?? []) {
+      const minutes = asNumber(row.activeMinutesSum);
+      switch (row.activityLevel) {
+        case 'LIGHT': light += minutes; break;
+        case 'MODERATE': moderate += minutes; break;
+        case 'VIGOROUS': vigorous += minutes; break;
+        default: break;
+      }
+    }
+  }
+
+  const sedentaryFromLevel = fromLevels && fromLevels.sedentary > 0 ? fromLevels.sedentary : 0;
+  const sedentaryMin = sedentaryFromLevel > 0
+    ? Math.round(sedentaryFromLevel)
+    : Math.round(durationToMinutes(parts.sedentaryRollup?.sedentaryPeriod?.durationSum));
   const azm = parts.azmRollup?.activeZoneMinutes;
   const activeZoneMinutes = asNumber(azm?.sumInFatBurnHeartZone)
     + asNumber(azm?.sumInCardioHeartZone)

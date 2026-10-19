@@ -157,9 +157,16 @@ export class GoogleHealthService implements IWearableService {
         `exercise.interval.civil_start_time >= "${dateStr}" AND exercise.interval.civil_start_time < "${next}"`,
         GOOGLE_SOURCES_FAMILY,
       )),
+      this.settle('activity-level', () => this.reconcile(
+        userId,
+        token,
+        'activity-level',
+        `activity_level.interval.civil_start_time >= "${dateStr}" AND activity_level.interval.civil_start_time < "${next}"`,
+        GOOGLE_WEARABLES_FAMILY,
+      )),
     ]);
     this.assertSome('activity', parts);
-    const [steps, activeMinutes, sedentary, calories, azm, timeInZone, caloriesInZone, resting, zones, exercises] = parts;
+    const [steps, activeMinutes, sedentary, calories, azm, timeInZone, caloriesInZone, resting, zones, exercises, activityLevel] = parts;
 
     return assembleActivitySummary({
       stepsRollup: first(steps.value),
@@ -172,6 +179,7 @@ export class GoogleHealthService implements IWearableService {
       restingPoints: resting.value ?? [],
       zoneThresholdPoints: zones.value ?? [],
       exercisePoints: exercises.value ?? [],
+      activityLevelPoints: activityLevel.value ?? [],
       date: dateStr,
     });
   }

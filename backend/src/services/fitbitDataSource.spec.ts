@@ -2,8 +2,12 @@ import {
   allowsGoogleHealthReads,
   allowsLegacyFitbitReads,
   fitbitDataSourceMode,
+  legacyFitbitRetired,
   resolveDailyProvider,
 } from './fitbitDataSource';
+
+const beforeShutdown = new Date('2026-10-19T12:00:00Z');
+const shutdownDay = new Date('2026-10-30T00:00:00Z');
 
 describe('fitbit data source flag', () => {
   const original = process.env.FITBIT_DATA_SOURCE;
@@ -17,7 +21,9 @@ describe('fitbit data source flag', () => {
     delete process.env.FITBIT_DATA_SOURCE;
     expect(fitbitDataSourceMode()).toBe('auto');
     expect(allowsGoogleHealthReads()).toBe(true);
-    expect(allowsLegacyFitbitReads()).toBe(true);
+    expect(allowsLegacyFitbitReads(beforeShutdown)).toBe(true);
+    expect(legacyFitbitRetired(beforeShutdown)).toBe(false);
+    expect(legacyFitbitRetired(shutdownDay)).toBe(true);
 
     process.env.FITBIT_DATA_SOURCE = 'sometimes';
     expect(fitbitDataSourceMode()).toBe('auto');
@@ -30,26 +36,60 @@ describe('fitbit data source flag', () => {
       hasTokens: jest.fn().mockResolvedValue(true),
     };
     const fitbit = { isConfigured: () => true };
-    await expect(resolveDailyProvider('user', google, fitbit)).resolves.toBe('google');
+    await expect(resolveDailyProvider('user', google, fitbit, beforeShutdown)).resolves.toBe('google');
 
     google.hasTokens.mockResolvedValue(false);
-    await expect(resolveDailyProvider('user', google, fitbit)).resolves.toBe('fitbit');
+    await expect(resolveDailyProvider('user', google, fitbit, beforeShutdown)).resolves.toBe('fitbit');
   });
 
   it('auto falls back to legacy Fitbit when Google credentials are not set', async () => {
     process.env.FITBIT_DATA_SOURCE = 'auto';
     const google = { isConfigured: () => false, hasTokens: jest.fn() };
     const fitbit = { isConfigured: () => true };
-    await expect(resolveDailyProvider('user', google, fitbit)).resolves.toBe('fitbit');
+    await expect(resolveDailyProvider('user', google, fitbit, beforeShutdown)).resolves.toBe('fitbit');
     expect(google.hasTokens).not.toHaveBeenCalled();
+  });
+
+  it('after the shutdown, auto with no Google client returns 503 and does not select Fitbit', async () => {
+    process.env.FITBIT_DATA_SOURCE = 'auto';
+    await expect(resolveDailyProvider(
+      'user',
+      { isConfigured: () => false, hasTokens: async () => false },
+      { isConfigured: () => true },
+      shutdownDay,
+    )).rejects.toMatchObject({ httpStatus: 503, requiresAuth: false });
+    expect(allowsLegacyFitbitReads(shutdownDay)).toBe(false);
+  });
+
+  it('after the shutdown, auto with a Google client but no tokens asks for consent', async () => {
+    process.env.FITBIT_DATA_SOURCE = 'auto';
+    await expect(resolveDailyProvider(
+      'user',
+      { isConfigured: () => true, hasTokens: async () => false },
+      { isConfigured: () => true },
+      shutdownDay,
+    )).rejects.toMatchObject({
+      httpStatus: 200,
+      requiresAuth: true,
+    });
   });
 
   it('legacy mode ignores a connected Google Health account', async () => {
     process.env.FITBIT_DATA_SOURCE = 'legacy';
     expect(allowsGoogleHealthReads()).toBe(false);
     const google = { isConfigured: () => true, hasTokens: jest.fn().mockResolvedValue(true) };
-    await expect(resolveDailyProvider('user', google, { isConfigured: () => true })).resolves.toBe('fitbit');
+    await expect(resolveDailyProvider('user', google, { isConfigured: () => true }, beforeShutdown)).resolves.toBe('fitbit');
     expect(google.hasTokens).not.toHaveBeenCalled();
+  });
+
+  it('legacy mode stops selecting Fitbit after the shutdown', async () => {
+    process.env.FITBIT_DATA_SOURCE = 'legacy';
+    await expect(resolveDailyProvider(
+      'user',
+      { isConfigured: () => false, hasTokens: async () => false },
+      { isConfigured: () => true },
+      shutdownDay,
+    )).rejects.toMatchObject({ httpStatus: 503, requiresAuth: false });
   });
 
   it('google mode does not call the legacy API and asks for consent when disconnected', async () => {

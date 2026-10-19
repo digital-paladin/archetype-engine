@@ -41,22 +41,50 @@ export function allowsGoogleHealthReads(): boolean {
   return fitbitDataSourceMode() !== 'legacy';
 }
 
-export function allowsLegacyFitbitReads(): boolean {
+/** Inclusive UTC calendar day Google shuts down the Fitbit Web API. */
+export const FITBIT_WEB_API_SHUTDOWN = '2026-10-30';
+
+export function legacyFitbitRetired(now: Date = new Date()): boolean {
+  return now.toISOString().slice(0, 10) >= FITBIT_WEB_API_SHUTDOWN;
+}
+
+export function allowsLegacyFitbitReads(now: Date = new Date()): boolean {
+  if (legacyFitbitRetired(now)) return false;
   return fitbitDataSourceMode() !== 'google';
+}
+
+function sunsetError(google: ConfiguredClient): WearableSourceError {
+  if (google.isConfigured()) {
+    return new WearableSourceError(
+      'The Fitbit Web API shut down on 2026-10-30. Authorize Google Health at /api/google-health/connect-url.',
+      200,
+      true,
+    );
+  }
+  return new WearableSourceError(
+    'The Fitbit Web API shut down on 2026-10-30. Set GOOGLE_HEALTH_CLIENT_ID and GOOGLE_HEALTH_CLIENT_SECRET, then authorize at /api/google-health/connect-url.',
+    503,
+  );
 }
 
 /**
  * Which client should serve today's Fitbit-shaped payloads
  * (sleep, activity, nutrition, vitals).
+ *
+ * Before 2026-10-30 UTC, `auto` with no Google client keeps the legacy path.
+ * On and after that date the legacy API is not selected.
  */
 export async function resolveDailyProvider(
   userId: string,
   google: GoogleHealthClient,
   fitbit: ConfiguredClient,
+  now: Date = new Date(),
 ): Promise<'google' | 'fitbit'> {
   const mode = fitbitDataSourceMode();
+  const retired = legacyFitbitRetired(now);
 
   if (mode === 'legacy') {
+    if (retired) throw sunsetError(google);
     if (!fitbit.isConfigured()) {
       throw new WearableSourceError(
         'Fitbit not configured. Set FITBIT_CLIENT_ID and FITBIT_CLIENT_SECRET.',
@@ -84,7 +112,8 @@ export async function resolveDailyProvider(
   }
 
   if (google.isConfigured() && await google.hasTokens(userId)) return 'google';
-  if (fitbit.isConfigured()) return 'fitbit';
+  if (!retired && fitbit.isConfigured()) return 'fitbit';
+  if (retired) throw sunsetError(google);
   throw new WearableSourceError(
     'No Fitbit provider configured. Set GOOGLE_HEALTH_CLIENT_ID and GOOGLE_HEALTH_CLIENT_SECRET, or the legacy FITBIT_CLIENT_ID and FITBIT_CLIENT_SECRET.',
     503,

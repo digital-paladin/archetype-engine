@@ -1,6 +1,10 @@
 import { getDataService } from './data/dataService';
 import { FitbitTokens } from './data/IDataService';
+import { legacyFitbitRetired } from './fitbitDataSource';
 import { parseFitbitSleepDay, parseFitbitSleepRange } from './fitbitSleepParse';
+
+const FITBIT_SHUTDOWN_MESSAGE =
+  'Fitbit Web API shut down on 2026-10-30. Use Google Health (/api/google-health/connect-url).';
 
 export interface SleepData {
   score: number;      // 0–100 composite score
@@ -93,7 +97,14 @@ export class FitbitService {
     return !!(this.clientId && this.clientSecret);
   }
 
+  private assertLegacyApiAvailable(): void {
+    if (legacyFitbitRetired()) {
+      throw new Error(FITBIT_SHUTDOWN_MESSAGE);
+    }
+  }
+
   getAuthUrl(): string {
+    this.assertLegacyApiAvailable();
     if (!this.clientId) throw new Error('FITBIT_CLIENT_ID not set in environment');
     const params = new URLSearchParams({
       response_type: 'code',
@@ -105,6 +116,7 @@ export class FitbitService {
   }
 
   async exchangeCode(code: string, userId: string): Promise<void> {
+    this.assertLegacyApiAvailable();
     if (!this.clientId || !this.clientSecret) {
       throw new Error('Fitbit client credentials not configured');
     }
@@ -134,6 +146,7 @@ export class FitbitService {
   }
 
   async getSleepData(date = 'today', userId: string): Promise<SleepData> {
+    this.assertLegacyApiAvailable();
     const dateStr = date === 'today' ? new Date().toLocaleDateString('en-CA') : date;
     console.log(`[FITBIT] Fetching sleep data from Fitbit API (date=${dateStr})...`);
     const tokens = await this.getValidTokens(userId);
@@ -155,6 +168,7 @@ export class FitbitService {
 
   /** Inclusive date range — one Fitbit call (max 100 days). */
   async getSleepRange(startDate: string, endDate: string, userId: string): Promise<Array<{ date: string } & SleepData>> {
+    this.assertLegacyApiAvailable();
     const tokens = await this.getValidTokens(userId);
     const fetchRange = (accessToken: string) =>
       fetch(`https://api.fitbit.com/1.2/user/-/sleep/date/${startDate}/${endDate}.json`, {
@@ -171,6 +185,7 @@ export class FitbitService {
   }
 
   async getActivities(date = 'today', userId: string): Promise<ActivitySummary> {
+    this.assertLegacyApiAvailable();
     console.log(`[FITBIT] Fetching activities from Fitbit API (date=${date})...`);
     const tokens = await this.getValidTokens(userId);
     const dateStr = date === 'today' ? new Date().toISOString().split('T')[0] : date;
@@ -188,6 +203,7 @@ export class FitbitService {
   }
 
   async getFoodLog(date = 'today', userId: string): Promise<FoodLog> {
+    this.assertLegacyApiAvailable();
     console.log(`[FITBIT] Fetching food log from Fitbit API (date=${date})...`);
     const tokens = await this.getValidTokens(userId);
     const dateStr = date === 'today' ? new Date().toISOString().split('T')[0] : date;
@@ -205,6 +221,7 @@ export class FitbitService {
   }
 
   async getVitals(userId: string, clientDate?: string): Promise<VitalsData> {
+    this.assertLegacyApiAvailable();
     console.log('[FITBIT] Fetching vitals from Fitbit API...');
     const tokens = await this.getValidTokens(userId);
     const today  = clientDate ?? new Date().toISOString().split('T')[0];

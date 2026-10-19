@@ -39,7 +39,7 @@ import { requireTier } from './middleware/requireTier.middleware';
 import { FitbitService } from './services/fitbit.service';
 import { OuraService } from './services/oura.service';
 import { GoogleHealthService } from './services/googleHealth.service';
-import { allowsGoogleHealthReads, allowsLegacyFitbitReads } from './services/fitbitDataSource';
+import { allowsGoogleHealthReads, allowsLegacyFitbitReads, fitbitDataSourceMode, legacyFitbitRetired } from './services/fitbitDataSource';
 import { getDataService } from './services/data/dataService';
 import { runDailyIncrement } from './services/abstinence.service';
 import { syncSleepDebtFromJournalSafe } from './services/sleepDebt.service';
@@ -256,6 +256,9 @@ httpServer.listen(PORT_NUMBER, '0.0.0.0', () => {
         score = sleep.score;
         hours = sleep.hours;
         provider = 'fitbit';
+      } else if (legacyFitbitRetired() && fitbitDataSourceMode() !== 'google') {
+        console.warn('[CRON] Fitbit Web API shut down on 2026-10-30 — skipping legacy sync. Connect Google Health.');
+        return;
       } else {
         console.warn('[CRON] ⚠ No wearable configured — skipping');
         return;
