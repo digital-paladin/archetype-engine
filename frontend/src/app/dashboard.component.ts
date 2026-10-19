@@ -43,8 +43,11 @@ import { CraftingStationComponent } from './crafting-station.component';
 import { TodoistPanelComponent } from './todoist-panel.component';
 import { BillingPanelComponent } from './billing-panel.component';
 import { IntegrationsPanelComponent } from './integrations-panel.component';
+import { SystemWindowComponent } from './system-window.component';
+import { SystemNoticeComponent } from './system-notice.component';
+import { SystemQuestService } from './system-quest.service';
 
-type PanelId = 'character' | 'skills' | 'health' | 'xp' | 'consumables' | 'sleep' | 'acm' | 'nutrition' | 'quests' | 'quest-lines' | 'analytics' | 'buffs' | 'vault' | 'courage' | 'rewards' | 'treasury' | 'inventory' | 'crafting' | 'todoist' | 'billing' | 'integrations';
+type PanelId = 'character' | 'skills' | 'health' | 'xp' | 'consumables' | 'sleep' | 'acm' | 'nutrition' | 'quests' | 'system' | 'quest-lines' | 'analytics' | 'buffs' | 'vault' | 'courage' | 'rewards' | 'treasury' | 'inventory' | 'crafting' | 'todoist' | 'billing' | 'integrations';
 
 const NAV_TABS: { id: PanelId; icon: string; label: string }[] = [
   { id: 'character',   icon: '⚔',  label: 'Character'   },
@@ -54,6 +57,7 @@ const NAV_TABS: { id: PanelId; icon: string; label: string }[] = [
   { id: 'acm',          icon: '⚖', label: 'ACM'          },
   { id: 'nutrition',    icon: '🍖', label: 'Nutrition'    },
   { id: 'quests',       icon: '📜', label: 'Quests'       },
+  { id: 'system',       icon: '◈',  label: 'System'       },
   { id: 'analytics',    icon: '📊', label: 'Analytics'    },
   { id: 'buffs',        icon: '⚗',  label: 'Buffs'         },
   { id: 'vault',        icon: '�', label: 'Vault'    },
@@ -71,7 +75,7 @@ const NAV_TABS: { id: PanelId; icon: string; label: string }[] = [
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [CommonModule, QuickLogComponent, CharacterDisplayComponent, BodyDiagramComponent, XpCalculatorComponent, ConsumablesComponent, AbilityHotbarComponent, ActivitySessionPanelComponent, SleepPanelComponent, FoodLogPanelComponent, ActivityFeedComponent, AcmPanelComponent, QuestsPanelComponent, SkillsPanelComponent, LootDropOverlayComponent, CharacterStatsPanelComponent, ProgressionAnalyticsComponent, CollectionsPanelComponent, StatusEffectsPanelComponent, VaultPanelComponent, CouragePanelComponent, RewardsCatalogPanelComponent, TreasuryPanelComponent, QuestLinesPanelComponent, InventoryComponent, CraftingStationComponent, TodoistPanelComponent, BillingPanelComponent, IntegrationsPanelComponent],
+  imports: [CommonModule, QuickLogComponent, CharacterDisplayComponent, BodyDiagramComponent, XpCalculatorComponent, ConsumablesComponent, AbilityHotbarComponent, ActivitySessionPanelComponent, SleepPanelComponent, FoodLogPanelComponent, ActivityFeedComponent, AcmPanelComponent, QuestsPanelComponent, SkillsPanelComponent, LootDropOverlayComponent, CharacterStatsPanelComponent, ProgressionAnalyticsComponent, CollectionsPanelComponent, StatusEffectsPanelComponent, VaultPanelComponent, CouragePanelComponent, RewardsCatalogPanelComponent, TreasuryPanelComponent, QuestLinesPanelComponent, InventoryComponent, CraftingStationComponent, TodoistPanelComponent, BillingPanelComponent, IntegrationsPanelComponent, SystemWindowComponent, SystemNoticeComponent],
   template: `
     <div class="eso-game-frame">
 
@@ -96,6 +100,12 @@ const NAV_TABS: { id: PanelId; icon: string; label: string }[] = [
             (click)="setPanel(tab.id)">
             <span class="eso-tab-icon">{{ tab.icon }}</span>
             <span class="eso-tab-label">{{ tab.label }}</span>
+            <span
+              class="sys-nav-badge"
+              data-testid="system-nav-badge"
+              *ngIf="tab.id === 'system' && systemQuests.activeCount() > 0">
+              {{ systemQuests.activeCount() }}
+            </span>
           </button>
         </nav>
 
@@ -392,6 +402,10 @@ const NAV_TABS: { id: PanelId; icon: string; label: string }[] = [
             <app-quests-panel (dateChanged)="onQuestDateChanged($event)"></app-quests-panel>
           </ng-container>
 
+          <ng-container *ngIf="activePanel() === 'system'">
+            <app-system-window></app-system-window>
+          </ng-container>
+
           <!-- ── Analytics Panel ── -->
           <ng-container *ngIf="activePanel() === 'analytics'">
             <app-progression-analytics></app-progression-analytics>
@@ -462,6 +476,7 @@ const NAV_TABS: { id: PanelId; icon: string; label: string }[] = [
 
       <!-- ══ Loot Drop Overlay (renders on top of everything when a drop fires) ══ -->
       <app-loot-drop-overlay></app-loot-drop-overlay>
+      <app-system-notice></app-system-notice>
 
     </div>
   `,
@@ -494,6 +509,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
   readonly rotColor = inject(RotColorService);
   readonly lootDrop    = inject(LootDropService);
   readonly comboService = inject(ComboService);
+  readonly systemQuests = inject(SystemQuestService);
 
   /** 1.5× when Fitbit reports ≥7 hours of sleep last night, otherwise 1.0. */
   restedMultiplier  = computed(() => (this.sleepData()?.hours ?? 0) >= 7 ? 1.5 : 1.0);
@@ -535,6 +551,8 @@ export class DashboardComponent implements OnInit, OnDestroy {
     this.socketService.onXpProjectionUpdate().subscribe((data: any) => {
       this.xpProjection.set(data);
     });
+
+    this.systemQuests.refresh();
 
     // Fetch Fitbit data on load, then refresh every 15 minutes
     this.fetchFitbitData();
