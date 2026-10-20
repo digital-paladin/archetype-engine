@@ -16,6 +16,7 @@ import {
   resolveSystemQuest,
   updateQuestProgress,
 } from '../services/systemQuest.service';
+import { ConsumptionError, logConsumption } from '../services/consumption.service';
 
 const router = Router();
 
@@ -151,6 +152,27 @@ router.post('/messages', async (req: Request, res: Response) => {
     const result = await postSystemMessage(userId, req.body ?? {}, authKind);
     res.status(result.idempotentReplay ? 200 : 201).json({ success: true, ...result });
   } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.post('/consumption', async (req: Request, res: Response) => {
+  try {
+    const { userId, authKind } = authOf(req);
+    const key = typeof req.body?.idempotencyKey === 'string' ? req.body.idempotencyKey.trim() : '';
+    if (!key || key.length > 200 || /[\r\n]/.test(key)) {
+      throw new SystemQuestError('invalid_consumption', 'idempotencyKey is required (1–200 characters)', 400);
+    }
+    const result = await logConsumption(userId, { ...(req.body ?? {}), idempotencyKey: key }, {
+      notifySystem: true,
+      authKind,
+    });
+    res.status(result.idempotentReplay ? 200 : 201).json({ success: true, ...result });
+  } catch (err) {
+    if (err instanceof ConsumptionError) {
+      res.status(err.status).json({ success: false, error: err.code, message: err.message });
+      return;
+    }
     sendError(res, err);
   }
 });

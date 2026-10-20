@@ -1,62 +1,7 @@
-import fs from 'fs';
-import path from 'path';
 import { randomUUID } from 'crypto';
-import { StatusEffect, StatusEffectType, StatusEffectCategory, EffectStat } from '../models/statusEffect';
-
-// Persist effects alongside activity-log.json (same journal directory)
-const JOURNAL_PATH = process.env.JOURNAL_PATH || '';
-const EFFECTS_FILE: string = process.env.STATUS_EFFECTS_PATH ||
-  (JOURNAL_PATH ? path.join(path.dirname(JOURNAL_PATH), 'status-effects.json') : '');
-
-let effects: StatusEffect[] = [];
-
-// ── Disk I/O ───────────────────────────────────────────────────────────────
-
-function loadFromDisk(): void {
-  if (!EFFECTS_FILE) return;
-  try {
-    if (fs.existsSync(EFFECTS_FILE)) {
-      const parsed: StatusEffect[] = JSON.parse(fs.readFileSync(EFFECTS_FILE, 'utf-8'));
-      if (Array.isArray(parsed)) {
-        effects = parsed;
-        console.log(`[STATUS EFFECTS] ✅ Loaded ${effects.length} effects from disk`);
-      }
-    }
-  } catch (err) {
-    console.warn(`[STATUS EFFECTS] Could not load from disk: ${err instanceof Error ? err.message : err}`);
-  }
-}
-
-function saveToDisk(): void {
-  if (!EFFECTS_FILE) return;
-  try {
-    fs.mkdirSync(path.dirname(EFFECTS_FILE), { recursive: true });
-    fs.writeFileSync(EFFECTS_FILE, JSON.stringify(effects, null, 2), 'utf-8');
-  } catch (err) {
-    console.warn(`[STATUS EFFECTS] Could not save to disk: ${err instanceof Error ? err.message : err}`);
-  }
-}
-
-loadFromDisk();
-
-// ── Helpers ────────────────────────────────────────────────────────────────
-
-function removeExpired(): void {
-  const now = new Date().toISOString();
-  const before = effects.length;
-  effects = effects.filter(e => e.expiresAt === null || e.expiresAt > now);
-  if (effects.length !== before) {
-    saveToDisk();
-  }
-}
-
-function computeExpiresAt(appliedAt: string, durationMinutes: number): string | null {
-  if (durationMinutes === -1) return null;
-  const ms = durationMinutes * 60 * 1000;
-  return new Date(new Date(appliedAt).getTime() + ms).toISOString();
-}
-
-// ── Public API ─────────────────────────────────────────────────────────────
+import { EffectStat, StatusEffect, StatusEffectCategory, StatusEffectType } from '../models/statusEffect';
+import { EffectDraft } from './consumptionEffects';
+import { getStatusEffectStore, newEffectId } from './statusEffect.store';
 
 export interface CreateEffectPayload {
   name: string;
@@ -67,81 +12,148 @@ export interface CreateEffectPayload {
   effects: EffectStat[];
   duration: number;   // minutes, -1 = indefinite
   notes?: string;
+  dose?: string;
+  effectKey?: string | null;
+  autoApplied?: boolean;
+  meta?: Record<string, unknown>;
 }
 
-export function getAllEffects(): StatusEffect[] {
-  removeExpired();
-  return [...effects];
+function expiresAtFor(appliedAt: string, durationMinutes: number): string | null {
+  if (durationMinutes === -1) return null;
+  return new Date(new Date(appliedAt).getTime() + durationMinutes * 60 * 1000).toISOString();
 }
 
-export function addEffect(payload: CreateEffectPayload): StatusEffect {
-  const appliedAt = new Date().toISOString();
-  const newEffect: StatusEffect = {
-    id: randomUUID(),
-    ...payload,
+function isCurrent(effect: StatusEffect, now: Date): boolean {
+  return effect.expiresAt === null || new Date(effect.expiresAt).getTime() > now.getTime();
+}
+
+export async function getAllEffects(userId: string, now = new Date()): Promise<StatusEffect[]> {
+  return getStatusEffectStore().listActive(userId, now.toISOString());
+}
+
+export async function addEffect(userId: string, payload: CreateEffectPayload, now = new Date()): Promise<StatusEffect> {
+  const appliedAt = now.toISOString();
+  const effect: StatusEffect = {
+    id: newEffectId(),
+    name: payload.name,
+    type: payload.type,
+    category: payload.category || 'other',
+    source: payload.source,
+    icon: payload.icon,
+    effects: payload.effects,
     appliedAt,
-    expiresAt: computeExpiresAt(appliedAt, payload.duration),
+    duration: payload.duration,
+    expiresAt: expiresAtFor(appliedAt, payload.duration),
+    notes: payload.notes,
+    dose: payload.dose,
+    effectKey: payload.effectKey ?? null,
+    autoApplied: payload.autoApplied === true,
+    meta: payload.meta,
   };
-  effects.push(newEffect);
-  saveToDisk();
-  console.log(`[STATUS EFFECTS] Added: "${newEffect.name}" (${newEffect.type}) expires ${newEffect.expiresAt ?? 'never'}`);
-  return newEffect;
+  const saved = await getStatusEffectStore().insert(userId, effect);
+  console.log(`[STATUS EFFECTS] Added: "${saved.name}" (${saved.type}) expires ${saved.expiresAt ?? 'never'}`);
+  return saved;
 }
 
-export function removeEffect(id: string): boolean {
-  const before = effects.length;
-  effects = effects.filter(e => e.id !== id);
-  if (effects.length !== before) {
-    saveToDisk();
-    return true;
+export async function removeEffect(userId: string, id: string): Promise<boolean> {
+  return getStatusEffectStore().remove(userId, id);
+}
+
+export async function removeEffectByKey(userId: string, effectKey: string): Promise<boolean> {
+  const existing = await getStatusEffectStore().findByKey(userId, effectKey);
+  if (!existing) return false;
+  return getStatusEffectStore().remove(userId, existing.id);
+}
+
+export async function clearAllEffects(userId: string): Promise<void> {
+  await getStatusEffectStore().clear(userId);
+}
+
+/**
+ * Create or refresh one auto effect. An active row keeps its id.
+ * An expired row is reused so the unique effect_key does not collide.
+ */
+export async function applyEffectDraft(userId: string, draft: EffectDraft, now = new Date()): Promise<StatusEffect | null> {
+  if (draft.remove) {
+    await removeEffectByKey(userId, draft.effectKey);
+    return null;
   }
-  return false;
-}
-
-export function clearAllEffects(): void {
-  effects = [];
-  saveToDisk();
+  const store = getStatusEffectStore();
+  const existing = await store.findByKey(userId, draft.effectKey);
+  const keepAppliedAt = existing && isCurrent(existing, now);
+  const appliedAt = keepAppliedAt ? existing.appliedAt : now.toISOString();
+  const expiresAt = draft.duration === -1
+    ? null
+    : new Date(now.getTime() + draft.duration * 60 * 1000).toISOString();
+  const duration = draft.duration === -1
+    ? -1
+    : Math.max(1, Math.round((new Date(expiresAt!).getTime() - new Date(appliedAt).getTime()) / 60000));
+  const effect: StatusEffect = {
+    id: existing?.id ?? randomUUID(),
+    name: draft.name,
+    type: draft.type,
+    category: draft.category,
+    source: draft.source,
+    icon: draft.icon,
+    effects: draft.effects,
+    appliedAt,
+    duration,
+    expiresAt,
+    notes: draft.notes,
+    dose: draft.dose,
+    effectKey: draft.effectKey,
+    autoApplied: true,
+    meta: draft.meta,
+  };
+  if (existing) return store.update(userId, effect);
+  return store.insert(userId, effect);
 }
 
 // ── Auto-managed "Sleep Deprived" debuff ────────────────────────────────────
 
 const SLEEP_DEPRIVED_NAME = 'Sleep Deprived';
+const SLEEP_DEPRIVED_KEY = 'sleep-deprived';
 /** Reuses the same boundary as the "Fatigued" vitality bucket — one canonical threshold. */
 export const SLEEP_DEPRIVED_VITALITY_THRESHOLD = 60;
 
-function buildSleepDeprivedPayload(sleepDebt: number): CreateEffectPayload {
+function buildSleepDeprivedDraft(sleepDebt: number): EffectDraft {
   return {
+    effectKey: SLEEP_DEPRIVED_KEY,
     name: SLEEP_DEPRIVED_NAME,
     type: 'debuff',
     category: 'training',
     source: `14-day rolling sleep debt: ${sleepDebt}h`,
     icon: '😴',
     effects: [
-      { stat: 'Focus',            modifier: '-20%', direction: 'negative' },
+      { stat: 'Focus', modifier: '-20%', direction: 'negative' },
       { stat: 'XP Consolidation', modifier: '-10%', direction: 'negative' },
     ],
-    duration: -1, // condition-managed, not time-managed — see syncSleepDeprivedEffect
+    duration: -1,
+    dose: `${sleepDebt}h sleep debt`,
+    notes: 'Applied while vitality is under the sleep-debt threshold. It clears when vitality recovers.',
+    autoApplied: true,
+    meta: { kind: SLEEP_DEPRIVED_KEY, sleepDebt },
   };
 }
 
 /**
  * Auto-applies/removes the "Sleep Deprived" debuff based on the current
  * vitality reading. Called from syncSleepDebtFromJournal() every time it
- * runs (wearable sync, consolidation, server cron, dashboard load, manual
- * journal edits) — no separate trigger needed. Idempotent: re-applying while
- * still active just refreshes the displayed debt figure.
+ * runs. Idempotent: re-applying while still active refreshes the debt figure
+ * and keeps the same row.
  */
-export function syncSleepDeprivedEffect(vitality: number, sleepDebt: number): void {
-  const existing = getAllEffects().find(e => e.name === SLEEP_DEPRIVED_NAME);
-  const shouldBeActive = vitality < SLEEP_DEPRIVED_VITALITY_THRESHOLD;
-
-  if (shouldBeActive && !existing) {
-    addEffect(buildSleepDeprivedPayload(sleepDebt));
-  } else if (!shouldBeActive && existing) {
-    removeEffect(existing.id);
-  } else if (shouldBeActive && existing) {
-    // Refresh the displayed debt figure rather than leaving a stale source string.
-    removeEffect(existing.id);
-    addEffect(buildSleepDeprivedPayload(sleepDebt));
+export async function syncSleepDeprivedEffect(userId: string, vitality: number, sleepDebt: number): Promise<void> {
+  const store = getStatusEffectStore();
+  const all = await store.listAll(userId);
+  for (const effect of all) {
+    if (effect.name === SLEEP_DEPRIVED_NAME && effect.effectKey !== SLEEP_DEPRIVED_KEY) {
+      await store.remove(userId, effect.id);
+    }
   }
+  const shouldBeActive = vitality < SLEEP_DEPRIVED_VITALITY_THRESHOLD;
+  if (!shouldBeActive) {
+    await removeEffectByKey(userId, SLEEP_DEPRIVED_KEY);
+    return;
+  }
+  await applyEffectDraft(userId, buildSleepDeprivedDraft(sleepDebt));
 }

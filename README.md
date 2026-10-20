@@ -133,7 +133,7 @@ archetype-engine/
         └── ...                 20+ additional panels
 ```
 
-**Data layer:** PostgreSQL via Supabase. Character stats, XP history, journal entries, ACM logs, and all sidecar data (vault, courage, spending, status effects) live in structured tables. Local markdown files remain the human-readable source of truth during the single-user phase.
+**Data layer:** PostgreSQL via Supabase. Character stats, XP history, journal entries, ACM logs, and sidecar data (vault, courage, spending) live in structured tables. Status effects do too, once `supabase/migrations/012_status_effects.sql` is applied — see [docs/CONSUMPTION-EFFECTS.md](docs/CONSUMPTION-EFFECTS.md). Local markdown files remain the human-readable source of truth during the single-user phase.
 
 ---
 

@@ -203,7 +203,12 @@ export async function syncSleepDebtFromJournal(
   const opening = Number(profile.sleep_debt) || 0;
   const sleepTrend = sleepTrendFromDebt(opening, sleepDebt);
 
-  syncSleepDeprivedEffect(vitality, sleepDebt);
+  try {
+    await syncSleepDeprivedEffect(userId, vitality, sleepDebt);
+  } catch (effectErr) {
+    console.warn('[SLEEP-DEBT] Status effect sync failed:',
+      effectErr instanceof Error ? effectErr.message : effectErr);
+  }
 
   const tonightHours = journal.find(n => String(n.date).slice(0, 10) === today)?.hours ?? 0;
   const extensionStreak = computeExtensionStreak(journal, { today });

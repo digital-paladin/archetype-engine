@@ -7,14 +7,15 @@ import { environment } from '../../environments/environment';
 
 // ── Tier system mirrors ESO item quality colours ──────────────────────────────
 export type ConsumableTier = 'Legendary' | 'Epic' | 'Superior' | 'Fine' | 'Normal';
-export type ConsumableType = 'Meal' | 'Drink' | 'Supplement';
+export type ConsumableType = 'Meal' | 'Drink' | 'Supplement' | 'Alcohol';
 export type BuffType =
   | 'Recovery'       // protein/sleep quality
   | 'Endurance'      // sustained energy, fasting support
   | 'Strength'       // strength training, muscle building
   | 'Focus'          // mental clarity, deep work
   | 'Vitality'       // overall health, LDL/inflammation
-  | 'Hydration';     // fluid balance, performance
+  | 'Hydration'      // fluid balance, performance
+  | 'Indulgence';    // alcohol — streak stays the player's call
 
 export interface Consumable {
   id: number;
@@ -29,6 +30,12 @@ export interface Consumable {
   calories: number;
   description: string;        // lore flavour text
   waterOz?: number;           // fl oz per serving (water/drink items for hydration tracking)
+  caffeineMg?: number;
+  addedSugarG?: number;
+  alcohol?: { volumeOz: number; abvPercent: number };
+  supplements?: Array<{ key: string; amount: number; unit: string }>;
+  /** Shown, not hidden. New seeds must not add avocado or avocado oil. */
+  allergenFlag?: string;
 }
 
 // ── Consumables Catalogue — example Paladin archetype entries (fork & customize) ─────
@@ -425,6 +432,7 @@ export const CONSUMABLES: Consumable[] = [
     tier: 'Fine',
     type: 'Meal',
     buffType: 'Vitality',
+    allergenFlag: 'avocado',
     buffValue: '+Monounsaturated Ward · +LDL Reduction',
     duration: '3 hrs',
     protein: 2,
@@ -518,6 +526,7 @@ export const CONSUMABLES: Consumable[] = [
     tier: 'Normal',
     type: 'Drink',
     buffType: 'Focus',
+    caffeineMg: 95,
     buffValue: '+Caffeine Focus (2 hrs) · +Fasted Bonus',
     duration: '2 hrs',
     protein: 0,
@@ -531,6 +540,7 @@ export const CONSUMABLES: Consumable[] = [
     tier: 'Normal',
     type: 'Drink',
     buffType: 'Vitality',
+    caffeineMg: 30,
     buffValue: '+EGCG Antioxidant · +Mild Focus',
     duration: '1.5 hrs',
     protein: 0,
@@ -550,6 +560,65 @@ export const CONSUMABLES: Consumable[] = [
     calories: 0,
     waterOz: 18,
     description: 'The sacred vow renewed 8 times daily. All other consumables fail without the Vow of Water as their foundation. The paladin who reaches 100 oz before midnight upholds the highest honour.',
+  },
+
+  // ── Alcohol & supplements — dose fields drive status effects ──────────────
+  // No avocado, avocado oil, seed oils, or added sugar in these seeds.
+  {
+    id: 40,
+    loreName: "Miller's Lantern Draught",
+    realFood: 'Miller Lite (12 oz)',
+    tier: 'Normal',
+    type: 'Alcohol',
+    buffType: 'Indulgence',
+    buffValue: 'Alcohol Shadow · scaled by standard drinks and bedtime',
+    duration: 'Clearance + sleep tail',
+    protein: 0,
+    calories: 96,
+    alcohol: { volumeOz: 12, abvPercent: 4.2 },
+    description: 'A light lantern draught: 12 oz at 4.2% ABV, about 0.84 standard drinks. Logging it applies Alcohol Shadow and asks whether ACM item 0 should break. The abstinence streak stays untouched until the player says so.',
+  },
+  {
+    id: 41,
+    loreName: 'Titan Salt of the Forge',
+    realFood: 'Creatine monohydrate (5 g)',
+    tier: 'Fine',
+    type: 'Supplement',
+    buffType: 'Strength',
+    buffValue: '+Creatine saturation · strength & recovery',
+    duration: '24 hrs',
+    protein: 0,
+    calories: 0,
+    supplements: [{ key: 'creatine', amount: 5, unit: 'g' }],
+    description: 'Plain creatine monohydrate. Five grams is the usual daily maintenance dose. No oils, no sweetener, no avocado. Repeat logs inside the day refresh one effect instead of stacking copies.',
+  },
+  {
+    id: 42,
+    loreName: "Night Warden's Glycinate",
+    realFood: 'Magnesium glycinate (200 mg elemental)',
+    tier: 'Fine',
+    type: 'Supplement',
+    buffType: 'Recovery',
+    buffValue: '+Magnesium calm · sleep & recovery',
+    duration: '8 hrs',
+    protein: 0,
+    calories: 0,
+    supplements: [{ key: 'magnesium', amount: 200, unit: 'mg' }],
+    description: 'Magnesium bound to glycine, not a seed oil. 200 mg elemental is a modest evening dose. The calm buff caps if another dose lands inside the same window.',
+  },
+  {
+    id: 43,
+    loreName: 'Dusk Mote',
+    realFood: 'Melatonin (0.5 mg)',
+    tier: 'Normal',
+    type: 'Supplement',
+    buffType: 'Recovery',
+    buffValue: '+Sleep onset · low-dose melatonin',
+    duration: '7 hrs',
+    protein: 0,
+    calories: 0,
+    supplements: [{ key: 'melatonin', amount: 0.5, unit: 'mg' }],
+    description: 'A half-milligram mote. Low doses are enough for sleep onset; a later log replaces this one instead of adding the milligrams together. Doses above 3 mg pick up a small focus penalty.',
   },
 ];
 
@@ -584,7 +653,7 @@ interface FoodLog {
   goalCalories: number;
 }
 
-type FilterTab = 'All' | ConsumableTier | 'Meal' | 'Drink' | 'Supplement' | 'Today';
+type FilterTab = 'All' | ConsumableTier | 'Meal' | 'Drink' | 'Supplement' | 'Alcohol' | 'Today';
 
 @Component({
   selector: 'app-consumables',
@@ -627,6 +696,9 @@ type FilterTab = 'All' | ConsumableTier | 'Meal' | 'Drink' | 'Supplement' | 'Tod
                 <div class="item-info">
                   <div class="item-lore-name">{{ item.loreName }}</div>
                   <div class="item-buff-type">{{ item.buffType }}</div>
+                  @if (item.allergenFlag) {
+                    <div class="item-allergen">Allergen: {{ item.allergenFlag }}</div>
+                  }
                 </div>
                 <div class="item-protein">{{ item.protein }}g</div>
               </div>
@@ -723,6 +795,30 @@ type FilterTab = 'All' | ConsumableTier | 'Meal' | 'Drink' | 'Supplement' | 'Tod
                   <span class="stat-label">CALORIES</span>
                   <span class="stat-value">{{ item.calories }}</span>
                 </div>
+                @if (item.alcohol) {
+                  <div class="stat-row">
+                    <span class="stat-label">ALCOHOL</span>
+                    <span class="stat-value">{{ item.alcohol.volumeOz }} oz · {{ item.alcohol.abvPercent }}% ABV</span>
+                  </div>
+                }
+                @if (item.caffeineMg) {
+                  <div class="stat-row">
+                    <span class="stat-label">CAFFEINE</span>
+                    <span class="stat-value">{{ item.caffeineMg }} mg</span>
+                  </div>
+                }
+                @if (item.supplements) {
+                  <div class="stat-row">
+                    <span class="stat-label">DOSE</span>
+                    <span class="stat-value">{{ supplementLabel(item) }}</span>
+                  </div>
+                }
+                @if (item.allergenFlag) {
+                  <div class="stat-row">
+                    <span class="stat-label">ALLERGEN</span>
+                    <span class="stat-value allergen">{{ item.allergenFlag }} — already in the catalogue, not a new seed</span>
+                  </div>
+                }
               </div>
 
               <button class="consume-btn" [class]="tierClass(item.tier)" (click)="onConsume(item)">
@@ -730,6 +826,12 @@ type FilterTab = 'All' | ConsumableTier | 'Meal' | 'Drink' | 'Supplement' | 'Tod
               </button>
               @if (consumeStatus()) {
                 <div class="consume-confirm">{{ consumeStatus() }}</div>
+              }
+              @if (abstinencePrompt()) {
+                <div class="consume-confirm abstain-flag">{{ abstinencePrompt() }}</div>
+              }
+              @if (dietFlags()) {
+                <div class="consume-confirm diet-flag">{{ dietFlags() }}</div>
               }
             </div>
           } @else {
@@ -747,11 +849,13 @@ type FilterTab = 'All' | ConsumableTier | 'Meal' | 'Drink' | 'Supplement' | 'Tod
 export class ConsumablesComponent implements OnInit {
   private readonly http = inject(HttpClient);
 
-  readonly filterTabs: FilterTab[] = ['All', 'Meal', 'Drink', 'Legendary', 'Epic', 'Superior', 'Fine', 'Normal', 'Today'];
+  readonly filterTabs: FilterTab[] = ['All', 'Meal', 'Drink', 'Supplement', 'Alcohol', 'Legendary', 'Epic', 'Superior', 'Fine', 'Normal', 'Today'];
 
   activeFilter    = signal<FilterTab>('All');
   selectedItem    = signal<Consumable | null>(null);
   consumeStatus   = signal('');
+  abstinencePrompt = signal('');
+  dietFlags = signal('');
   fitbitLog       = signal<FoodEntry[]>([]);
   fitbitNutrition = signal<FoodLog | null>(null);
   fitbitLoading   = signal(false);
@@ -760,8 +864,9 @@ export class ConsumablesComponent implements OnInit {
   filteredConsumables = computed(() => {
     const f = this.activeFilter();
     if (f === 'All')  return CONSUMABLES;
-    if (f === 'Meal') return CONSUMABLES.filter(c => c.type === 'Meal');
-    if (f === 'Drink') return CONSUMABLES.filter(c => c.type === 'Drink');
+    if (f === 'Meal' || f === 'Drink' || f === 'Supplement' || f === 'Alcohol') {
+      return CONSUMABLES.filter(c => c.type === f);
+    }
     return CONSUMABLES.filter(c => c.tier === f);
   });
 
@@ -773,6 +878,8 @@ export class ConsumablesComponent implements OnInit {
   selectItem(item: Consumable) {
     this.selectedItem.set(item);
     this.consumeStatus.set('');
+    this.abstinencePrompt.set('');
+    this.dietFlags.set('');
   }
 
   ngOnInit(): void {
@@ -803,19 +910,40 @@ export class ConsumablesComponent implements OnInit {
     const proteinPart = item.protein > 0 ? ` · +${item.protein}g protein` : '';
     const calPart     = item.calories > 0 ? ` · ${item.calories} kcal` : '';
     this.consumeStatus.set(`${item.buffValue}${proteinPart}${calPart}`);
+    this.abstinencePrompt.set('');
+    this.dietFlags.set('');
     if (this.consumeTimeout) clearTimeout(this.consumeTimeout);
-    this.consumeTimeout = setTimeout(() => this.consumeStatus.set(''), 3000);
+    this.consumeTimeout = setTimeout(() => this.consumeStatus.set(''), 4000);
 
-    this.http.post(`${environment.apiUrl}/api/consume`, {
+    this.http.post<{
+      success: boolean;
+      effects?: Array<{ name: string; dose?: string }>;
+      abstinencePrompt?: { message?: string } | null;
+      dietFlags?: string[];
+    }>(`${environment.apiUrl}/api/consume`, {
       itemName:  item.realFood,
       protein:   item.protein,
       calories:  item.calories,
       buffValue: item.buffValue,
       clientDate: new Date().toLocaleDateString('en-CA'),
-      ...(item.waterOz !== undefined && { waterOz: item.waterOz })
+      ...(item.waterOz !== undefined && { waterOz: item.waterOz }),
+      ...(item.caffeineMg !== undefined && { caffeineMg: item.caffeineMg }),
+      ...(item.addedSugarG !== undefined && { addedSugarG: item.addedSugarG }),
+      ...(item.alcohol && { alcohol: item.alcohol }),
+      ...(item.supplements && { supplements: item.supplements }),
     }).subscribe({
-      error: (err) => console.error('[CONSUME] Journal write failed:', err)
+      next: (res) => {
+        const applied = (res.effects ?? []).map(effect => effect.dose ? `${effect.name} (${effect.dose})` : effect.name);
+        if (applied.length > 0) this.consumeStatus.set(`${this.consumeStatus()} · ${applied.join(', ')}`);
+        if (res.abstinencePrompt?.message) this.abstinencePrompt.set(res.abstinencePrompt.message);
+        if (res.dietFlags && res.dietFlags.length > 0) this.dietFlags.set(`Diet flag: ${res.dietFlags.join(', ')}`);
+      },
+      error: (err) => console.error('[CONSUME] Journal write failed:', err),
     });
+  }
+
+  supplementLabel(item: Consumable): string {
+    return (item.supplements ?? []).map(s => `${s.amount} ${s.unit} ${s.key}`).join(', ');
   }
 
   tierClass(tier: ConsumableTier): string {
@@ -827,6 +955,7 @@ export class ConsumablesComponent implements OnInit {
       case 'Meal':       return '🍖';
       case 'Drink':      return '⚗';
       case 'Supplement': return '💊';
+      case 'Alcohol':    return '🍺';
     }
   }
 }

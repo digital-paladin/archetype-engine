@@ -56,6 +56,14 @@ export class SocketService {
     });
   }
 
+  onStatusEffectsUpdated(): Observable<{ at?: string }> {
+    return new Observable((observer) => {
+      const handler = (data: { at?: string }) => observer.next(data ?? {});
+      this.socket.on('status-effects-updated', handler);
+      return () => this.socket.off('status-effects-updated', handler);
+    });
+  }
+
   /** System quest notices are emitted only to this user's room. */
   onSystemNotice(): Observable<{ type: string; title: string; detail: string; questId?: string; at: string }> {
     return new Observable((observer) => {

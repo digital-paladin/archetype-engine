@@ -276,6 +276,13 @@ $normal    : #b0b0b0;   // grey/white
 }
 
 // ── Consume button ────────────────────────────────────────────────────────────
+.item-allergen {
+  margin-top: 2px;
+  font-size: 0.58rem;
+  letter-spacing: 0.4px;
+  color: #e07a5f;
+}
+
 .consume-confirm {
   margin-top: 8px;
   padding: 6px 10px;
@@ -286,6 +293,17 @@ $normal    : #b0b0b0;   // grey/white
   letter-spacing: 0.5px;
   line-height: 1.4;
   animation: consume-fade-in 0.2s ease;
+
+  &.abstain-flag,
+  &.diet-flag {
+    border-color: rgba(#e07a5f, 0.55);
+    color: #e7b2a4;
+    background: rgba(#e07a5f, 0.08);
+  }
+}
+
+.stat-value.allergen {
+  color: #e07a5f;
 }
 
 @keyframes consume-fade-in {

@@ -25,7 +25,17 @@ export interface JournalEntry {
   protein_level?: 'low' | 'medium' | 'high';
   protein_grams_logged?: number;
   meal_count?: number;
-  food_log?: Array<{ item: string; protein: number; calories: number; ts: string }>;
+  food_log?: Array<{
+    item: string;
+    protein: number;
+    calories: number;
+    ts: string;
+    waterOz?: number;
+    caffeineMg?: number;
+    addedSugarG?: number;
+    alcohol?: { volumeOz: number; abvPercent: number };
+    supplements?: Array<{ key: string; amount: number; unit?: string }>;
+  }>;
   food_quality?: 'poor' | 'mixed' | 'mixed/good' | 'good' | 'excellent';
   calories_status?: 'deficit' | 'maintenance' | 'surplus';
   stress_level?: 'low' | 'medium' | 'high';

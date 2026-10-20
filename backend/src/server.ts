@@ -13,6 +13,7 @@ import authRouter from './routes/auth.routes';
 import actionLogRouter from './routes/actionLog.routes';
 import dailyMetricsRouter from './routes/dailyMetrics.routes';
 import consumeRouter, { setConsumeSocketIO } from './routes/consume.routes';
+import { setConsumptionSocketIO } from './services/consumption.service';
 import foodEstimateRouter from './routes/foodEstimate.routes';
 import fitbitRouter from './routes/fitbit.routes';
 import ouraRouter from './routes/oura.routes';
@@ -162,6 +163,7 @@ app.get('/api/journal/today', authMiddleware, async (req: Request, res: Response
 // Configure Socket.IO for activity routes
 setSocketIO(io);
 setConsumeSocketIO(io);
+setConsumptionSocketIO(io);
 setSystemSocketIO(io);
 io.use(socketAuthMiddleware);
 

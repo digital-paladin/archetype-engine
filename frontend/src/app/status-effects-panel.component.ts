@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
 import { forkJoin } from 'rxjs';
 import { environment } from '../environments/environment';
+import { SocketService } from './socket.service';
 
 // ─── Interfaces ────────────────────────────────────────────────────────────
 
@@ -25,6 +26,9 @@ interface StatusEffect {
   duration: number;
   expiresAt: string | null;
   notes?: string;
+  dose?: string;
+  autoApplied?: boolean;
+  effectKey?: string | null;
 }
 
 interface EffectTemplate {
@@ -78,7 +82,9 @@ interface EffectTemplate {
             [class.aef-debuff]="e.type === 'debuff'"
             [class.aef-mixed]="e.type === 'mixed'">
           <span class="aef-icon">{{ e.icon }}</span>
-          <span class="aef-name">{{ e.name }}</span>
+          <span class="aef-name" [title]="effectTitle(e)">{{ e.name }}</span>
+          <span class="aef-dose" *ngIf="e.dose">{{ e.dose }}</span>
+          <span class="aef-auto" *ngIf="e.autoApplied">auto</span>
           <span class="aef-time" *ngIf="e.expiresAt">{{ timeRemainingShort(e.expiresAt) }}</span>
           <span class="aef-time aef-indf" *ngIf="!e.expiresAt">∞</span>
           <button class="aef-x" (click)="dismissEffect(e.id)" title="Dismiss">✕</button>
@@ -199,8 +205,11 @@ interface EffectTemplate {
           <div class="sep-item-row">
             <span class="sep-item-icon">{{ e.icon }}</span>
             <div class="sep-item-info">
-              <span class="sep-item-name">{{ e.name }}</span>
-              <span class="sep-item-source">{{ e.source }}</span>
+              <span class="sep-item-name">
+                {{ e.name }}
+                <span class="sep-auto" *ngIf="e.autoApplied">auto</span>
+              </span>
+              <span class="sep-item-source">{{ e.source }}<span *ngIf="e.dose"> · {{ e.dose }}</span></span>
             </div>
             <span class="sep-item-time" *ngIf="e.expiresAt">{{ timeRemainingShort(e.expiresAt) }}</span>
             <span class="sep-item-time sep-indf" *ngIf="!e.expiresAt">∞</span>
@@ -219,8 +228,10 @@ interface EffectTemplate {
               </li>
             </ul>
             <div class="sep-item-meta">
+              <span *ngIf="e.dose">Dose {{ e.dose }}</span>
               <span *ngIf="e.expiresAt">⏱ {{ timeRemaining(e.expiresAt) }} remaining</span>
               <span *ngIf="!e.expiresAt">∞ Indefinite</span>
+              <span *ngIf="e.autoApplied">Logged automatically</span>
             </div>
             <div class="sep-notes" *ngIf="e.notes">{{ e.notes }}</div>
           </div>
@@ -316,6 +327,25 @@ interface EffectTemplate {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+    .aef-dose {
+      font-size: 10px;
+      color: var(--eso-text-muted, #6a5030);
+      font-family: sans-serif;
+      max-width: 88px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .aef-auto, .sep-auto {
+      font-size: 9px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #7b9cd4;
+      border: 1px solid rgba(123, 156, 212, 0.45);
+      padding: 0 4px;
+      margin-left: 4px;
+      font-family: sans-serif;
     }
     .aef-buff   .aef-name { color: #8fe8aa; }
     .aef-debuff .aef-name { color: #f0906e; }
@@ -539,6 +569,7 @@ export class StatusEffectsPanelComponent implements OnInit, OnDestroy {
   @Input() compact = false;
 
   private readonly http = inject(HttpClient);
+  private readonly socket = inject(SocketService);
 
   // ── Signals ──
   activeEffects = signal<StatusEffect[]>([]);
@@ -567,17 +598,25 @@ export class StatusEffectsPanelComponent implements OnInit, OnDestroy {
 
   // ── Refresh interval (every 60s to update countdowns) ──
   private refreshTimer: ReturnType<typeof setInterval> | null = null;
+  private socketSub: { unsubscribe(): void } | null = null;
 
   ngOnInit(): void {
     this.loadData();
+    this.socketSub = this.socket.onStatusEffectsUpdated().subscribe(() => this.loadData());
     this.refreshTimer = setInterval(() => {
-      // Trigger re-render so countdown timers update
-      this.activeEffects.set([...this.activeEffects()]);
+      const now = Date.now();
+      this.activeEffects.set(this.activeEffects().filter(effect =>
+        !effect.expiresAt || new Date(effect.expiresAt).getTime() > now));
     }, 60_000);
   }
 
   ngOnDestroy(): void {
     if (this.refreshTimer) clearInterval(this.refreshTimer);
+    this.socketSub?.unsubscribe();
+  }
+
+  effectTitle(effect: StatusEffect): string {
+    return [effect.source, effect.dose, effect.autoApplied ? 'auto' : ''].filter(Boolean).join(' · ');
   }
 
   refresh(): void {
