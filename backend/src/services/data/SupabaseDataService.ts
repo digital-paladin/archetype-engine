@@ -180,19 +180,55 @@ export class SupabaseDataService implements IDataService {
   }
 
   async getActivityLog(userId: string, limit = 50, onDate?: string): Promise<ActivityEntry[]> {
-    let query = this.db
-      .from('activity_log')
-      .select('*')
-      .eq('user_id', userId);
-    if (onDate) {
-      const bounds = utcDayBounds(onDate);
-      query = query.gte('logged_at', bounds.start).lte('logged_at', bounds.end);
+    // PostgREST caps a single response (Supabase default max-rows is 1000).
+    // A larger limit has to be paged or the tail is silently dropped.
+    // `onDate` keeps the UTC day window used by consolidation and GET /api/activities.
+    if (limit <= 1000) {
+      let query = this.db
+        .from('activity_log')
+        .select('*')
+        .eq('user_id', userId);
+      if (onDate) {
+        const bounds = utcDayBounds(onDate);
+        query = query.gte('logged_at', bounds.start).lte('logged_at', bounds.end);
+      }
+      const { data, error } = await query
+        .order('logged_at', { ascending: false })
+        .limit(limit);
+      if (error) throw error;
+      return data ?? [];
     }
-    const { data, error } = await query
-      .order('logged_at', { ascending: false })
-      .limit(limit);
-    if (error) throw error;
-    return data ?? [];
+    return this.pageActivities(userId, limit, undefined, onDate);
+  }
+
+  async getActivitiesByTypePrefix(userId: string, prefix: string): Promise<ActivityEntry[]> {
+    return this.pageActivities(userId, 50_000, prefix);
+  }
+
+  /** Page activity_log so a host row cap cannot truncate the requested window. */
+  private async pageActivities(
+    userId: string,
+    limit: number,
+    prefix?: string,
+    onDate?: string,
+  ): Promise<ActivityEntry[]> {
+    const pageSize = 1000;
+    const rows: ActivityEntry[] = [];
+    const bounds = onDate ? utcDayBounds(onDate) : undefined;
+    for (let offset = 0; offset < limit; offset += pageSize) {
+      const end = Math.min(offset + pageSize, limit) - 1;
+      let query = this.db.from('activity_log').select('*').eq('user_id', userId);
+      if (prefix) query = query.like('activity_type', `${prefix}%`);
+      if (bounds) query = query.gte('logged_at', bounds.start).lte('logged_at', bounds.end);
+      const { data, error } = await query
+        .order('logged_at', { ascending: false })
+        .range(offset, end);
+      if (error) throw error;
+      const batch = data ?? [];
+      rows.push(...batch);
+      if (batch.length < end - offset + 1) break;
+    }
+    return rows;
   }
 
   // ── Vault ────────────────────────────────────────────────────────────────
