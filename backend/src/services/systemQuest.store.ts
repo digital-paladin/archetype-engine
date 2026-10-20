@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { getSupabaseAdmin } from '../lib/supabase';
 import {
+  QuestEdit,
   QuestObjective,
   QuestPenalty,
   QuestResolution,
@@ -146,14 +147,36 @@ function rowToQuest(row: Record<string, unknown>): SystemQuestRecord {
     recoveryType: (row.recovery_type as RecoveryType | null) ?? null,
     parentQuestId: row.parent_quest_id ? String(row.parent_quest_id) : null,
     resolution: (row.resolution as QuestResolution | null) ?? null,
+    edits: parseEdits(row.edits),
     createdAt: new Date(String(row.created_at)).toISOString(),
     updatedAt: new Date(String(row.updated_at)).toISOString(),
     resolvedAt: row.resolved_at ? new Date(String(row.resolved_at)).toISOString() : null,
   };
 }
 
+function parseEdits(value: unknown): QuestEdit[] {
+  if (!Array.isArray(value)) return [];
+  const edits: QuestEdit[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const row = item as Record<string, unknown>;
+    if (typeof row.idempotencyKey !== 'string' || !Array.isArray(row.changes)) continue;
+    const source: QuestSource = row.source === 'user' || row.source === 'grokbot' || row.source === 'system'
+      ? row.source
+      : 'system';
+    edits.push({
+      idempotencyKey: row.idempotencyKey,
+      reason: typeof row.reason === 'string' ? row.reason : null,
+      changes: row.changes.filter((change): change is string => typeof change === 'string'),
+      at: typeof row.at === 'string' ? row.at : new Date(0).toISOString(),
+      source,
+    });
+  }
+  return edits;
+}
+
 function questToRow(quest: SystemQuestRecord): Record<string, unknown> {
-  return {
+  const row: Record<string, unknown> = {
     id: quest.id,
     user_id: quest.userId,
     idempotency_key: quest.idempotencyKey,
@@ -181,6 +204,10 @@ function questToRow(quest: SystemQuestRecord): Record<string, unknown> {
     updated_at: quest.updatedAt,
     resolved_at: quest.resolvedAt,
   };
+  // Omit an empty history so creates, progress, and resolution still write
+  // against a database that has not applied the edits column yet.
+  if (quest.edits && quest.edits.length > 0) row.edits = quest.edits;
+  return row;
 }
 
 function rowToMessage(row: Record<string, unknown>): SystemMessageRecord {

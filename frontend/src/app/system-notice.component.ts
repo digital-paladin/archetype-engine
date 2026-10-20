@@ -44,6 +44,7 @@ import { SystemQuestService } from './system-quest.service';
     .sys-notice-card[data-type="failed"],
     .sys-notice-card[data-type="expired"] { border-color: rgba(255, 140, 140, 0.8); }
     .sys-notice-card[data-type="cleared"] { border-color: rgba(140, 230, 170, 0.8); }
+    .sys-notice-card[data-type="edited"] { border-color: rgba(255, 210, 122, 0.85); }
     .sys-notice-kicker { letter-spacing: 0.28em; color: #8eb7ff; margin: 0 0 8px; }
     .sys-notice-type { margin: 0; letter-spacing: 0.14em; font-size: 12px; color: #d7e7ff; }
     h2 { margin: 12px 0; font-size: 22px; }
@@ -74,6 +75,7 @@ export class SystemNoticeComponent {
       case 'failed': return 'QUEST FAILED';
       case 'expired': return 'QUEST EXPIRED';
       case 'revealed': return 'QUEST REVEALED';
+      case 'edited': return 'QUEST EDITED';
       default: return 'MESSAGE';
     }
   }

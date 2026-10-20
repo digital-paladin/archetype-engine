@@ -6,6 +6,7 @@ import {
   revokeServiceCredential,
 } from '../services/serviceCredential.service';
 import {
+  correctSystemQuest,
   createSystemQuest,
   decideRewardApproval,
   getSystemQuest,
@@ -99,6 +100,16 @@ router.patch('/quests/:id/progress', async (req: Request, res: Response) => {
     const { userId } = authOf(req);
     const quest = await updateQuestProgress(userId, req.params.id, req.body ?? {});
     res.json({ success: true, quest });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.patch('/quests/:id', async (req: Request, res: Response) => {
+  try {
+    const { userId, authKind } = authOf(req);
+    const result = await correctSystemQuest(userId, req.params.id, req.body ?? {}, authKind);
+    res.json({ success: true, ...result });
   } catch (err) {
     sendError(res, err);
   }

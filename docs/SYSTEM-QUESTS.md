@@ -15,6 +15,8 @@ Apply the migration to that same Supabase project before the bot calls the API. 
 
 That creates `system_quests`, `system_messages`, and `service_credentials` (RLS on, service role bypasses it).
 
+Quest corrections (`PATCH /api/system/quests/:id`) need a second migration, [`011_system_quest_edits.sql`](../supabase/migrations/011_system_quest_edits.sql). It adds `system_quests.edits`. Railway auto-deploys the backend from `main` and does **not** run SQL, so apply `011` in the Supabase SQL editor (or with `apply-migration.js`) before the bot calls the correction route. Create, progress, clear, and fail keep working if `011` is not applied yet; the correction route will fail until the column exists. The frontend on Vercel does not need a database change.
+
 Alternatively, from a machine that has `DATABASE_URL` in `backend/.env`:
 
 ```bash
@@ -65,6 +67,7 @@ Base URL is the backend origin. Send `Authorization: Bearer <token>` on every ca
 | `GET` | `/api/system/quests?status=active` | player or service | List. Runs expiry first. Hidden quests are masked unless `includeHidden=true`. |
 | `GET` | `/api/system/quests/:id` | player or service | One quest. Same masking. |
 | `PATCH` | `/api/system/quests/:id/progress` | player or service | `{ objectiveId, progress?, done? }` on an **active** quest. |
+| `PATCH` | `/api/system/quests/:id` | player or service | Correct an **active** quest. See below. |
 | `POST` | `/api/system/quests/:id/clear` | player or service | Status `cleared`. XP comes from the stored `xpReward` only. Second call does not pay again. |
 | `POST` | `/api/system/quests/:id/fail` | player or service | Status `failed`. Subtracts `penalty.xpPenalty` once and creates `penalty.penaltyQuest` if present. |
 | `POST` | `/api/system/quests/:id/reveal` | player or service | Unseals a hidden quest. |
@@ -165,6 +168,49 @@ curl -X POST "$API/api/system/messages" \
   -d '{"idempotencyKey":"msg:2026-10-20:wake","body":"The System is watching."}'
 ```
 
+### Correct an active quest
+
+`PATCH /api/system/quests/:id` changes an **active** quest in place. Cleared, failed, and expired quests return `409` `not_active`. The body is a partial correction. `idempotencyKey` is required and is unique per quest: sending it again returns `200` with `idempotentReplay: true`, the quest as it is now, and the original `changes`. The second body is ignored, and a second audit message is not posted.
+
+```json
+{
+  "idempotencyKey": "edit:daily:2026-10-20:parkour",
+  "reason": "Tuesday schedule changed: parkour 7:30-8:30 PM",
+  "deadline": "2026-10-21T03:15:00.000Z",
+  "objectives": {
+    "update": [
+      { "id": "last-bite", "label": "Last bite before 9:45 PM" },
+      { "id": "lights-out", "label": "Lights out by 10:15 PM" }
+    ],
+    "add": [{ "id": "parkour", "label": "Parkour technique only", "target": 1 }],
+    "remove": ["stretch"]
+  },
+  "penalty": {
+    "penaltyQuest": {
+      "title": "Lights out at 22:15",
+      "objectives": [{ "id": "bed", "label": "In bed by 22:15" }]
+    }
+  }
+}
+```
+
+Accepted fields: `title`, `description`, `deadline` (ISO timestamp, or `null` to clear; must be in the future), `objectives`, `xpReward`, `penalty`, `reason` (optional, up to 500 characters), `acknowledgeXpIncrease`.
+
+`objectives.update` changes `label` and/or `target` on an existing id. Progress stays. A target below current progress is `409` `target_below_progress`. `objectives.add` starts at progress 0. `objectives.remove` only succeeds when that objective has no progress (`409` `objective_has_progress` otherwise). The quest must keep at least one objective and cannot exceed 20. Progress itself still goes through `PATCH …/progress`.
+
+`penalty` adjusts an existing penalty: `recoveryType`, `xpPenalty`, and `penaltyQuest` title, description, or objectives. A quest with no penalty returns `409` `no_penalty`. Penalty quests stay recovery-type.
+
+`xpReward` may be replaced. Lowering it is applied and written into the history. Raising it, or raising `penalty.xpPenalty`, without `acknowledgeXpIncrease: true` returns `422` `xp_increase_not_acknowledged` and changes nothing. With the flag, the history line says the increase was acknowledged. Clearing still pays whatever `xpReward` is stored after the correction. The request cannot change `kind`, `status`, `training`, rewards that cost money, or approval.
+
+The response includes `changes` (human-readable lines) and the quest. `editedAt` is set, `editCount` increments, and `lastEditReason` is the latest `reason`. The System window shows an **EDITED** marker and the reason. A System message is stored on the quest with the same lines, so `GET /api/system/messages` is the audit trail. A sealed hidden quest still gets `editedAt`, but the message and the listed quest do not include the corrected text or the reason.
+
+```bash
+curl -X PATCH "$API/api/system/quests/$QUEST_ID" \
+  -H "Authorization: Bearer $ARCHETYPE_SYSTEM_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"idempotencyKey":"edit:daily:2026-10-20:parkour","reason":"Tuesday schedule changed: parkour 7:30-8:30 PM","objectives":{"update":[{"id":"last-bite","label":"Last bite before 9:45 PM"},{"id":"lights-out","label":"Lights out by 10:15 PM"}],"add":[{"id":"parkour","label":"Parkour technique only","target":1}]}}'
+```
+
 Hidden quest (list masks `title`, `description`, objectives, rewards, and penalty until `POST …/reveal` or the quest is resolved):
 
 ```bash
@@ -182,6 +228,6 @@ Connect Socket.IO to the backend origin with `auth: { token: "<login access toke
 { "type": "issued", "title": "Mobility walk", "detail": "Twenty easy minutes outside.", "questId": "…", "at": "…" }
 ```
 
-`type` is `issued`, `progress`, `cleared`, `failed`, `expired`, `revealed`, or `message`. The window pops a notice for everything except `progress`, and the nav badge counts active quests (including sealed ones). Anonymous sockets are not in a user room and do not receive these events.
+`type` is `issued`, `progress`, `cleared`, `failed`, `expired`, `revealed`, `message`, or `edited`. The window pops a notice for everything except `progress`, and the nav badge counts active quests (including sealed ones). Anonymous sockets are not in a user room and do not receive these events.
 
 Activity and consume log events are also sent to `user:<id>` rather than every connected client. The local character-sheet file watcher still broadcasts `character:updated` in dev, because that feed is not tied to a user id.
