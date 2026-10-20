@@ -3,6 +3,7 @@
  * Pure helpers are unit-tested; DB ops use Supabase admin.
  */
 
+import { randomUUID } from 'crypto';
 import { getSupabaseAdmin } from '../lib/supabase';
 import {
   ABSTINENCE_AMCC_LABELS,
@@ -20,6 +21,25 @@ export interface BreakLogEntry {
   compound_break: boolean;
 }
 
+/**
+ * Phase 3 — Disciplined Indulgence scheduling. A user pre-declares an upcoming
+ * indulgence (estimated type + count) before it happens; once it does, they
+ * resolve it with what actually occurred, and the estimate/actual gap is kept
+ * alongside the normal break_log entry that resolution produces.
+ */
+export interface ScheduledBreakEntry {
+  id: string;
+  scheduled_date: string;
+  estimated_type: string;
+  estimated_count: number;
+  notes?: string;
+  created_at: string;
+  resolved: boolean;
+  actual_type?: string;
+  actual_count?: number;
+  resolved_at?: string;
+}
+
 export interface ResistanceEvent {
   date: string;
   note: string;
@@ -35,6 +55,7 @@ export interface AbstinenceStreakRow {
   last_break_type: BreakType | null;
   break_log: BreakLogEntry[];
   resistance_events: ResistanceEvent[];
+  scheduled_breaks: ScheduledBreakEntry[];
   created_at?: string;
 }
 
@@ -49,6 +70,7 @@ export interface StreakPublicView {
   amcc_tooltip: string;
   resistance_events: ResistanceEvent[];
   break_log: BreakLogEntry[];
+  scheduled_breaks: ScheduledBreakEntry[];
 }
 
 export function todayChicago(): string {
@@ -79,6 +101,7 @@ export function normalizeStreakRow(raw: Record<string, unknown>): AbstinenceStre
     last_break_type: (raw.last_break_type as BreakType | null) ?? null,
     break_log: parseJsonArray<BreakLogEntry>(raw.break_log),
     resistance_events: parseJsonArray<ResistanceEvent>(raw.resistance_events),
+    scheduled_breaks: parseJsonArray<ScheduledBreakEntry>(raw.scheduled_breaks),
     created_at: raw.created_at as string | undefined,
   };
 }
@@ -95,6 +118,7 @@ export function toPublicView(row: AbstinenceStreakRow, today: string): StreakPub
     amcc_tooltip: ABSTINENCE_AMCC_TOOLTIP,
     resistance_events: row.resistance_events,
     break_log: row.break_log,
+    scheduled_breaks: row.scheduled_breaks,
   };
 }
 
@@ -203,6 +227,110 @@ export function appendResistance(
   };
 }
 
+export type ScheduleAppendResult =
+  | { ok: true; updated: AbstinenceStreakRow }
+  | { ok: false; error: string };
+
+/** Pure: pre-declare an upcoming indulgence. Does not touch the streak yet. */
+export function appendScheduledBreak(
+  row: AbstinenceStreakRow,
+  params: {
+    id: string;
+    scheduledDate: string;
+    estimatedType: string;
+    estimatedCount: number;
+    notes?: string;
+    createdAt: string;
+  },
+): ScheduleAppendResult {
+  if (!isAbstinenceItem(row.item_index)) {
+    return { ok: false, error: 'item_index is not an abstinence item' };
+  }
+  const estimatedType = params.estimatedType.trim();
+  if (!estimatedType) return { ok: false, error: 'estimated_type is required' };
+  if (!Number.isInteger(params.estimatedCount) || params.estimatedCount <= 0) {
+    return { ok: false, error: 'estimated_count must be a positive integer' };
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(params.scheduledDate)) {
+    return { ok: false, error: 'scheduled_date must be YYYY-MM-DD' };
+  }
+  const notes = (params.notes ?? '').trim();
+  if (notes.length > 280) return { ok: false, error: 'notes max 280 characters' };
+
+  const entry: ScheduledBreakEntry = {
+    id: params.id,
+    scheduled_date: params.scheduledDate,
+    estimated_type: estimatedType,
+    estimated_count: params.estimatedCount,
+    notes: notes || undefined,
+    created_at: params.createdAt,
+    resolved: false,
+  };
+
+  return {
+    ok: true,
+    updated: { ...row, scheduled_breaks: [...row.scheduled_breaks, entry] },
+  };
+}
+
+export type ScheduleResolveResult =
+  | {
+      ok: true;
+      updated: AbstinenceStreakRow;
+      compound_break: boolean;
+      already_broken_today: boolean;
+      variance: { type_matched: boolean; count_diff: number };
+    }
+  | { ok: false; error: string };
+
+/**
+ * Pure: reconcile a previously-scheduled indulgence with what actually happened.
+ * Reuses `applyBreak` (type: 'scheduled') for the streak-reset / break_log side
+ * effect, then layers the estimate-vs-actual comparison on top in the same
+ * updated row so both persist in a single write.
+ */
+export function resolveScheduledBreak(
+  row: AbstinenceStreakRow,
+  allRows: AbstinenceStreakRow[],
+  scheduledId: string,
+  params: { actualType: string; actualCount: number; resolvedAt: string },
+): ScheduleResolveResult {
+  const idx = row.scheduled_breaks.findIndex((s) => s.id === scheduledId);
+  if (idx === -1) return { ok: false, error: 'scheduled break not found' };
+  const target = row.scheduled_breaks[idx];
+  if (target.resolved) return { ok: false, error: 'scheduled break already resolved' };
+
+  const actualType = params.actualType.trim();
+  if (!actualType) return { ok: false, error: 'actual_type is required' };
+  if (!Number.isInteger(params.actualCount) || params.actualCount < 0) {
+    return { ok: false, error: 'actual_count must be a non-negative integer' };
+  }
+
+  const breakResult = applyBreak(row, allRows, params.resolvedAt, 'scheduled');
+  if (!breakResult.ok) return { ok: false, error: breakResult.error };
+
+  const resolvedEntry: ScheduledBreakEntry = {
+    ...target,
+    resolved: true,
+    actual_type: actualType,
+    actual_count: params.actualCount,
+    resolved_at: params.resolvedAt,
+  };
+  const nextScheduled = [...breakResult.updated.scheduled_breaks];
+  nextScheduled[idx] = resolvedEntry;
+
+  return {
+    ok: true,
+    updated: { ...breakResult.updated, scheduled_breaks: nextScheduled },
+    compound_break: breakResult.compound_break,
+    already_broken_today: breakResult.already_broken_today,
+    variance: {
+      type_matched: actualType === target.estimated_type,
+      count_diff: params.actualCount - target.estimated_count,
+    },
+  };
+}
+
 export async function seedAbstinenceStreaks(
   userId: string,
   opts?: { currentStreak?: number; longestStreak?: number },
@@ -217,6 +345,7 @@ export async function seedAbstinenceStreaks(
     longest_streak: longest,
     break_log: [],
     resistance_events: [],
+    scheduled_breaks: [],
   }));
 
   const { error } = await admin.from('abstinence_streaks').upsert(rows, {
@@ -341,6 +470,104 @@ export async function getResistanceEvents(
   const rows = await ensureAbstinenceRows(userId);
   const row = rows.find((r) => r.item_index === itemIndex);
   return row?.resistance_events ?? [];
+}
+
+export async function scheduleIndulgence(params: {
+  userId: string;
+  itemIndex: number;
+  scheduledDate: string;
+  estimatedType: string;
+  estimatedCount: number;
+  notes?: string;
+}): Promise<StreakPublicView> {
+  if (!isAbstinenceItem(params.itemIndex)) {
+    throw new Error('item_index is not an abstinence item');
+  }
+  const rows = await ensureAbstinenceRows(params.userId);
+  const row = rows.find((r) => r.item_index === params.itemIndex);
+  if (!row) throw new Error('streak row missing');
+
+  const result = appendScheduledBreak(row, {
+    id: randomUUID(),
+    scheduledDate: params.scheduledDate,
+    estimatedType: params.estimatedType,
+    estimatedCount: params.estimatedCount,
+    notes: params.notes,
+    createdAt: new Date().toISOString(),
+  });
+  if (!result.ok) throw new Error(result.error);
+
+  const admin = getSupabaseAdmin();
+  const { error } = await admin
+    .from('abstinence_streaks')
+    .update({ scheduled_breaks: result.updated.scheduled_breaks })
+    .eq('user_id', params.userId)
+    .eq('item_index', params.itemIndex);
+  if (error) throw new Error(error.message);
+
+  return toPublicView(result.updated, todayChicago());
+}
+
+export async function resolveScheduledIndulgence(params: {
+  userId: string;
+  itemIndex: number;
+  scheduledId: string;
+  actualType: string;
+  actualCount: number;
+  today?: string;
+}): Promise<{
+  streak: StreakPublicView;
+  compound_break: boolean;
+  already_broken_today: boolean;
+  variance: { type_matched: boolean; count_diff: number };
+}> {
+  if (!isAbstinenceItem(params.itemIndex)) {
+    throw new Error('item_index is not an abstinence item');
+  }
+  const today = params.today ?? todayChicago();
+  const rows = await ensureAbstinenceRows(params.userId);
+  const row = rows.find((r) => r.item_index === params.itemIndex);
+  if (!row) throw new Error('streak row missing');
+
+  const result = resolveScheduledBreak(row, rows, params.scheduledId, {
+    actualType: params.actualType,
+    actualCount: params.actualCount,
+    resolvedAt: today,
+  });
+  if (!result.ok) throw new Error(result.error);
+
+  const admin = getSupabaseAdmin();
+  const { error } = await admin
+    .from('abstinence_streaks')
+    .update({
+      current_streak: result.updated.current_streak,
+      last_break_date: result.updated.last_break_date,
+      last_break_type: result.updated.last_break_type,
+      break_log: result.updated.break_log,
+      scheduled_breaks: result.updated.scheduled_breaks,
+    })
+    .eq('user_id', params.userId)
+    .eq('item_index', params.itemIndex);
+  if (error) throw new Error(error.message);
+
+  return {
+    streak: toPublicView(result.updated, today),
+    compound_break: result.compound_break,
+    already_broken_today: result.already_broken_today,
+    variance: result.variance,
+  };
+}
+
+export async function getScheduledIndulgences(
+  userId: string,
+  itemIndex: number,
+): Promise<ScheduledBreakEntry[]> {
+  if (!isAbstinenceItem(itemIndex)) {
+    throw new Error('item_index is not an abstinence item');
+  }
+  const rows = await ensureAbstinenceRows(userId);
+  const row = rows.find((r) => r.item_index === itemIndex);
+  return row?.scheduled_breaks ?? [];
 }
 
 /**
