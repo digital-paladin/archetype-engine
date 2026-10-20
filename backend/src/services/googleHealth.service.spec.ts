@@ -60,14 +60,45 @@ describe('GoogleHealthService parsers', () => {
     expect(sleep.score).toBe(100);
   });
 
-  it('getAuthUrl includes offline access and sleep.readonly without include_granted_scopes', () => {
+  it('getAuthUrl requests the restricted readonly scopes and never embeds the client secret', () => {
     process.env.GOOGLE_HEALTH_CLIENT_ID = 'test-client';
+    process.env.GOOGLE_HEALTH_CLIENT_SECRET = 'super-secret-value';
     const url = new GoogleHealthService().getAuthUrl('user-uuid');
     expect(url).toContain('accounts.google.com/o/oauth2/v2/auth');
     expect(url).toContain('access_type=offline');
     expect(url).toContain('prompt=consent');
     expect(url).toContain('googlehealth.sleep.readonly');
+    expect(url).toContain('googlehealth.activity_and_fitness.readonly');
+    expect(url).toContain('googlehealth.health_metrics_and_measurements.readonly');
+    expect(url).toContain('googlehealth.nutrition.readonly');
+    expect(url).not.toContain('writeonly');
     expect(url).not.toContain('include_granted_scopes');
+    expect(url).not.toContain('super-secret-value');
     expect(url).toContain('state=user-uuid');
+  });
+
+  it('parseSleep counts classic ASLEEP stages toward the same score formula', () => {
+    const sleep = svc.parseSleep({
+      dataPoints: [{
+        sleep: {
+          interval: {
+            startTime: '2026-08-12T23:00:00Z',
+            endTime: '2026-08-13T07:00:00Z',
+            civilStartTime: { time: { hours: 18, minutes: 0 } },
+            civilEndTime: { time: { hours: 2, minutes: 0 } },
+          },
+          metadata: { mainSleep: true },
+          stages: [
+            { startTime: '2026-08-12T23:00:00Z', endTime: '2026-08-13T05:00:00Z', type: 'ASLEEP' },
+            { startTime: '2026-08-13T05:00:00Z', endTime: '2026-08-13T07:00:00Z', type: 'RESTLESS' },
+          ],
+        },
+      }],
+    }, '2026-08-13');
+    expect(sleep.light_min).toBe(360);
+    expect(sleep.hours).toBe(6);
+    expect(sleep.startTime).toBe('18:00');
+    expect(sleep.endTime).toBe('02:00');
+    expect(sleep.score).toBeGreaterThan(0);
   });
 });

@@ -6,6 +6,7 @@ import { FitbitService } from '../services/fitbit.service';
 import { GoogleHealthService } from '../services/googleHealth.service';
 import { authMiddleware } from '../middleware/auth.middleware';
 import { syncSleepDebtFromJournalSafe } from '../services/sleepDebt.service';
+import { allowsGoogleHealthReads, allowsLegacyFitbitReads, fitbitDataSourceMode } from '../services/fitbitDataSource';
 
 const router = Router();
 const oura = new OuraService();
@@ -27,6 +28,7 @@ router.get('/status', authMiddleware, async (req: Request, res: Response) => {
 
   res.json({
     success: true,
+    fitbitDataSource: fitbitDataSourceMode(),
     providers: {
       oura: {
         configured: oura.isConfigured(),
@@ -109,7 +111,7 @@ router.get('/sleep/today', authMiddleware, async (req: Request, res: Response) =
 
   // Google Health (Fitbit / Pixel Watch)
   try {
-    if (googleHealth.isConfigured() && await googleHealth.hasTokens(userId)) {
+    if (allowsGoogleHealthReads() && googleHealth.isConfigured() && await googleHealth.hasTokens(userId)) {
       const sleep = await googleHealth.getSleepData(dateStr, userId);
       if (sleep.score > 0 || sleep.hours > 0) {
         await getDataService().upsertJournalEntry(userId, {
@@ -130,7 +132,7 @@ router.get('/sleep/today', authMiddleware, async (req: Request, res: Response) =
 
   // Legacy Fitbit Web API fallback
   try {
-    if (fitbit.isConfigured()) {
+    if (allowsLegacyFitbitReads() && fitbit.isConfigured()) {
       const sleep = await fitbit.getSleepData(dateStr, userId);
       return res.json({ success: true, provider: 'fitbit', source: 'fitbit', sleep });
     }
