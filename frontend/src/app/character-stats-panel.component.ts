@@ -546,6 +546,9 @@ export class CharacterStatsPanelComponent implements OnInit {
         this.classes.set(data.skillTrees ?? []);
         this.lifts.set(this.liftsFromRpg(data.rpgStats));
       },
+      error: () => {
+        // finalize() already clears the loader; swallow so a 500 is not an unhandled rejection.
+      },
     });
   }
 

@@ -17,6 +17,7 @@ export class SocketService {
       autoConnect: true,
       reconnectionAttempts: 10,
       reconnectionDelay: 2000,
+      auth: { token: this.readToken() },
     });
     this.socket.on('connect', () => console.log('[Socket] ✅ Connected:', this.socket.id));
     this.socket.on('disconnect', (reason) => console.log('[Socket] ❌ Disconnected:', reason));
@@ -55,7 +56,33 @@ export class SocketService {
     });
   }
 
+  /** System quest notices are emitted only to this user's room. */
+  onSystemNotice(): Observable<{ type: string; title: string; detail: string; questId?: string; at: string }> {
+    return new Observable((observer) => {
+      const handler = (data: { type: string; title: string; detail: string; questId?: string; at: string }) => {
+        observer.next(data);
+      };
+      this.socket.on('system:notice', handler);
+      return () => this.socket.off('system:notice', handler);
+    });
+  }
+
+  /** Re-join the user room after login, refresh, or logout. */
+  refreshAuth(): void {
+    this.socket.auth = { token: this.readToken() };
+    if (this.socket.connected) this.socket.disconnect();
+    this.socket.connect();
+  }
+
   disconnect(): void {
     this.socket.disconnect();
+  }
+
+  private readToken(): string {
+    try {
+      return localStorage.getItem('auth_token') ?? '';
+    } catch {
+      return '';
+    }
   }
 }

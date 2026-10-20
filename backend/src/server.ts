@@ -35,6 +35,9 @@ import treasuryRouter from './routes/treasury.routes';
 import todoistRouter from './routes/todoist.routes';
 import abstinenceRouter from './routes/abstinence.routes';
 import { authMiddleware } from './middleware/auth.middleware';
+import systemRouter from './routes/system.routes';
+import { setSystemSocketIO, expireDueQuests } from './services/systemQuest.service';
+import { socketAuthMiddleware } from './realtime/socketAuth';
 import { requireTier } from './middleware/requireTier.middleware';
 import { FitbitService } from './services/fitbit.service';
 import { OuraService } from './services/oura.service';
@@ -118,6 +121,7 @@ app.use('/api/ai', aiRouter);
 app.use('/api/wearables', requireTier('paladin'), wearablesRouter);
 app.use('/api/acm', acmRouter);
 app.use('/api/quests', questsRouter);
+app.use('/api/system', systemRouter);
 app.use('/api/fasting', fastingRouter);
 app.use('/api/status-effects', statusEffectsRouter);
 app.use('/api/body-status', bodyStatusRouter);
@@ -157,6 +161,8 @@ app.get('/api/journal/today', authMiddleware, async (req: Request, res: Response
 // Configure Socket.IO for activity routes
 setSocketIO(io);
 setConsumeSocketIO(io);
+setSystemSocketIO(io);
+io.use(socketAuthMiddleware);
 
 // WebSocket connection handling
 io.on('connection', (socket) => {
@@ -317,6 +323,19 @@ httpServer.listen(PORT_NUMBER, '0.0.0.0', () => {
   }, { timezone: 'UTC' });
 
   console.log('[CRON] 📅 Daily consolidation scheduled at 00:05 UTC (previous UTC date)');
+}
+
+{
+  // System quest deadlines — every minute. Expiry applies the stored penalty once.
+  cronSchedule('* * * * *', async () => {
+    try {
+      const changed = await expireDueQuests();
+      if (changed > 0) console.log(`[CRON] System quests expired: ${changed}`);
+    } catch (err) {
+      console.error(`[CRON] ❌ System quest expiry failed: ${err instanceof Error ? err.message : err}`);
+    }
+  });
+  console.log('[CRON] 📅 System quest expiry sweep scheduled every minute');
 }
 
 // Graceful shutdown
