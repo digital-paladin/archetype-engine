@@ -13,6 +13,7 @@ import {
   ACM_ALCOHOL_ITEM_INDEX,
   addCalendarDays,
   alcoholAbstinencePrompt,
+  bedtimeForDate,
   detectDietFlags,
   localDateInZone,
   normalizeBedtime,
@@ -223,15 +224,16 @@ async function resolveBedtime(
   userId: string,
   clientDate: string,
   journal: NonNullable<ConsumptionOptions['journal']>,
-  fallback: string,
+  cfg: ConsumptionEffectsConfig,
   override: string | null,
 ): Promise<string> {
-  if (override) return normalizeBedtime(override, fallback);
+  const scheduled = bedtimeForDate(clientDate, cfg);
+  if (override) return normalizeBedtime(override, scheduled);
   const today = await journal.getJournalEntry(userId, clientDate);
-  if (today?.sleep_start) return normalizeBedtime(today.sleep_start, fallback);
+  if (today?.sleep_start) return normalizeBedtime(today.sleep_start, scheduled);
   const yesterday = await journal.getJournalEntry(userId, addCalendarDays(clientDate, -1));
-  if (yesterday?.sleep_start) return normalizeBedtime(yesterday.sleep_start, fallback);
-  return fallback;
+  if (yesterday?.sleep_start) return normalizeBedtime(yesterday.sleep_start, scheduled);
+  return scheduled;
 }
 
 function noticeFor(result: Omit<ConsumptionResult, 'noticeBody' | 'idempotentReplay' | 'effectsError'>): string {
@@ -301,8 +303,7 @@ async function writeConsumption(
   if (normalized.bodyWeightLb) cfg.protein.bodyWeightLb = normalized.bodyWeightLb;
   const journal = options.journal ?? getDataService();
   const clientDate = normalizeClientDate(normalized, cfg.timeZone);
-  const bedtime = await resolveBedtime(userId, clientDate, journal, cfg.defaultBedtime, normalized.bedtimeOverride);
-  cfg.defaultBedtime = bedtime;
+  const bedtime = await resolveBedtime(userId, clientDate, journal, cfg, normalized.bedtimeOverride);
 
   const entry = await journal.getJournalEntry(userId, clientDate);
   const proteinGrams = (entry?.protein_grams_logged ?? 0) + normalized.protein;

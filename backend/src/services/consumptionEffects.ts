@@ -5,6 +5,7 @@
 
 import {
   ConsumptionEffectsConfig,
+  canonicalWeekday,
   proteinGoalGrams,
   resolveConsumptionConfig,
 } from '../config/consumptionEffects.config';
@@ -173,6 +174,31 @@ export function normalizeBedtime(raw: string | null | undefined, fallback: strin
   const minute = Number(match[2]);
   if (hour > 23 || minute > 59) return fallback;
   return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+const WEEKDAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'] as const;
+
+/** Weekday of a YYYY-MM-DD calendar date. Noon UTC avoids DST edges. */
+export function weekdayNameFromDate(dateStr: string): string {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const utc = new Date(Date.UTC(y, (m || 1) - 1, d || 1, 12));
+  return WEEKDAY_NAMES[utc.getUTCDay()];
+}
+
+/**
+ * Lights-out for a calendar date: the weekday override when one is configured,
+ * otherwise defaultBedtime. An explicit request bedtime is applied by the caller.
+ */
+export function bedtimeForDate(
+  dateStr: string,
+  cfg: Pick<ConsumptionEffectsConfig, 'defaultBedtime' | 'bedtimeByWeekday'>,
+): string {
+  const fallback = normalizeBedtime(cfg.defaultBedtime, '21:30');
+  const day = weekdayNameFromDate(dateStr);
+  for (const [key, value] of Object.entries(cfg.bedtimeByWeekday ?? {})) {
+    if (canonicalWeekday(key) === day && value) return normalizeBedtime(String(value), fallback);
+  }
+  return fallback;
 }
 
 function pctStat(stat: string, percent: number, direction: 'positive' | 'negative'): EffectStat | null {

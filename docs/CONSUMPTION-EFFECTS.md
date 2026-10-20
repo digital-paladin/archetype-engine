@@ -59,7 +59,7 @@ standard drinks = volumeOz × (ABV ÷ 100) ÷ 0.6
 
 Clearance is about one standard drink per hour (the usual rule of thumb for the ~0.015 g/dL/hour elimination rate). The effect then keeps running for a sleep/recovery tail, because sleep architecture can stay worse after blood alcohol is back near zero, especially when the drink is close to bed.
 
-Hours until bedtime are measured in `America/Chicago` (or `APP_TIMEZONE`) against today's bedtime. Bedtime is, in order: the request's `bedtime`, today's `sleep_start`, yesterday's `sleep_start`, then `23:00`. After bedtime the value is 0.
+Hours until bedtime are measured in `America/Chicago` (or `APP_TIMEZONE`) against today's bedtime. Bedtime is, in order: the request's `bedtime`, today's `sleep_start`, yesterday's `sleep_start`, then the weekday override, then the default. The player's lights-out is `21:30`, except Tuesday (parkour night) at `22:15`. An explicit `bedtime` on the request wins over all of those. After bedtime the value is 0, so a pour after lights-out is a nightcap.
 
 ```
 proximity = clamp(1.35 − 0.22 × hoursUntilBed, 0.30, 1.25)
@@ -74,22 +74,43 @@ duration           = clearance + tail
 
 Pleasure / Social Freedom is `+Mild` under 1 drink still clearing, `+Moderate` under 2.5, otherwise `+High`. The penalty is fixed when the dose is logged. It does not tick down every minute. The next dose recomputes from what is still clearing plus the new pour, and extends the expiry. A second row is not created.
 
-### One 12 oz Miller Lite, bedtime 23:00
+### One 12 oz Miller Lite
+
+Same 0.84 standard drinks. America/Chicago, October (CDT, UTC−5). Tuesday uses lights-out 22:15. Every other weekday uses 21:30. No `sleep_start` is logged, and the request does not send `bedtime`.
+
+#### Tuesday (bed 22:15) — 2026-10-20
 
 | | 7:00 PM | 9:45 PM |
 |---|---|---|
-| Hours before bed | 4 | 1.25 |
-| Proximity | 0.47 | 1.075 |
-| Severity | 0.395 | 0.903 |
-| Sleep Quality | −4% | −9% |
-| Recovery Rate | −3% | −7% |
-| XP Consolidation | −2% | −5% |
+| Hours before bed | 3.25 | 0.5 |
+| Proximity | 0.635 | 1.24 |
+| Severity | 0.533 | 1.042 |
+| Sleep Quality | −5% | −10% |
+| Recovery Rate | −4% | −8% |
+| XP Consolidation | −3% | −5% |
 | Testosterone | −2% | −4% |
 | Pleasure | +Mild | +Mild |
-| Duration | 2 h 10 m (130 min) | 4 h (240 min) |
+| Duration | 2 h 40 m (160 min) | 4 h 30 m (270 min) |
 | Dose shown | 0.84 standard drinks | 0.84 standard drinks |
 
-The 7 PM beer is a mild debuff that expires around 9:10 PM. The 9:45 PM beer is a bit more than twice the sleep penalty and still running well into the night. Three of those near bedtime land near the caps (sleep −27%, recovery −22%) rather than the old flat −30% / −25% / −10% for any amount.
+The 7 PM beer expires around 9:40 PM. The 9:45 PM beer is half an hour before parkour-night lights-out, about twice the sleep penalty, and still running past midnight.
+
+#### Any other weekday (bed 21:30)
+
+| | 7:00 PM | 9:45 PM |
+|---|---|---|
+| Hours before bed | 2.5 | 0 (15 min after lights-out) |
+| Proximity | 0.80 | 1.25 (the cap) |
+| Severity | 0.672 | 1.05 |
+| Sleep Quality | −7% | −11% |
+| Recovery Rate | −5% | −8% |
+| XP Consolidation | −3% | −5% |
+| Testosterone | −3% | −4% |
+| Pleasure | +Mild | +Mild |
+| Duration | 3 h 10 m (190 min) | 4 h 50 m (290 min) |
+| Dose shown | 0.84 standard drinks | 0.84 standard drinks |
+
+On a normal night the 7 PM beer is already a heavier debuff than the Tuesday 7 PM beer, and it expires around 10:10 PM. The 9:45 PM beer is after lights-out, so proximity sits on the cap. Three of those nightcaps land near the caps (sleep −32% before the 35% ceiling) rather than the old flat −30% / −25% / −10% for any amount.
 
 ## Caffeine, water, sugar, protein, supplements
 
@@ -126,11 +147,12 @@ Defaults live in `backend/src/config/consumptionEffects.config.ts`.
 | Env | Effect |
 |---|---|
 | `APP_TIMEZONE` | Bedtime clock. Default `America/Chicago`. |
-| `CONSUMPTION_BEDTIME` | Fallback bedtime `HH:MM`. Default `23:00`. |
+| `CONSUMPTION_BEDTIME` | Fallback lights-out `HH:MM` for weekdays without an override. Default `21:30`. An invalid value is ignored. |
+| `CONSUMPTION_BEDTIME_BY_WEEKDAY` | JSON object of weekday → `HH:MM`. Replaces the whole map. Default seed is `{"tuesday":"22:15"}`. Keys may be `tuesday`, `tue`, or `2` (Sunday = `0`). Unknown days and invalid times are dropped. A bad JSON value is ignored and the seed stays. |
 | `CONSUMPTION_BODYWEIGHT_LB` | Protein goal = 0.64 × this weight. |
 | `CONSUMPTION_HYDRATION_GOAL_OZ` | Default 100. |
 | `CONSUMPTION_PROTEIN_GOAL_GRAMS` | Used when weight is unset. Default 130. |
-| `CONSUMPTION_EFFECTS_JSON` | JSON object deep-merged over the defaults. A bad JSON value is ignored. |
+| `CONSUMPTION_EFFECTS_JSON` | JSON object deep-merged over the defaults, including `defaultBedtime` and `bedtimeByWeekday`. A bad JSON value is ignored. This merge runs after `CONSUMPTION_BEDTIME_BY_WEEKDAY`, so a weekday set here is added to that map. |
 | `STATUS_EFFECTS_STORE` | `memory`, `file`, or omit for Supabase when the service-role key is set. |
 | `STATUS_EFFECTS_PATH` | Legacy JSON path. Otherwise beside `JOURNAL_PATH`. |
 
@@ -151,12 +173,11 @@ curl -X POST "$API/api/consume" \
     "buffValue": "Alcohol Shadow",
     "alcohol": { "volumeOz": 12, "abvPercent": 4.2 },
     "consumedAt": "2026-10-20T19:00:00-05:00",
-    "clientDate": "2026-10-20",
-    "bedtime": "23:00"
+    "clientDate": "2026-10-20"
   }'
 ```
 
-`200` body (fields after `message` are new; `success` and `message` stay):
+`2026-10-20` is a Tuesday, so lights-out is 22:15. Sending `"bedtime": "23:00"` would use 23:00 instead. `200` body (fields after `message` are new; `success` and `message` stay):
 
 ```json
 {
@@ -167,10 +188,10 @@ curl -X POST "$API/api/consume" \
     "effectKey": "alcohol",
     "autoApplied": true,
     "dose": "0.84 standard drinks",
-    "source": "Miller Lite (12 oz) · 4.2% ABV · 4h before bedtime",
+    "source": "Miller Lite (12 oz) · 4.2% ABV · 3.25h before bedtime",
     "type": "mixed",
     "effects": [
-      { "stat": "Sleep Quality", "modifier": "-4%", "direction": "negative" }
+      { "stat": "Sleep Quality", "modifier": "-5%", "direction": "negative" }
     ]
   }],
   "abstinencePrompt": {
@@ -194,10 +215,11 @@ curl -X POST "$API/api/system/consumption" \
     "itemName": "Miller Lite (12 oz)",
     "calories": 96,
     "alcohol": { "volumeOz": 12, "abvPercent": 4.2 },
-    "consumedAt": "2026-10-20T21:45:00-05:00",
-    "bedtime": "23:00"
+    "consumedAt": "2026-10-20T21:45:00-05:00"
   }'
 ```
+
+On that Tuesday the 9:45 PM pour is 0.5 h before 22:15: Sleep Quality −10%, duration 270 minutes. The same pour on Wednesday (`2026-10-21T21:45:00-05:00`) is after 21:30, so the source says `at or after bedtime`, Sleep Quality is −11%, and the duration is 290 minutes.
 
 `201` the first time, `200` with `idempotentReplay: true` after that. `noticeBody` is also stored as a System message (`GET /api/system/messages`) and emitted as `system:notice`.
 

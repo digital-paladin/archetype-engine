@@ -107,7 +107,14 @@ export interface MelatoninConfig {
 
 export interface ConsumptionEffectsConfig {
   timeZone: string;
+  /** Fallback lights-out when no weekday override, journal sleep_start, or request bedtime applies. */
   defaultBedtime: string;
+  /**
+   * Optional lights-out by weekday. Keys are weekday names (`tuesday`),
+   * unique prefixes of at least 3 letters (`tue`), or `0`–`6` (Sunday = 0).
+   * Days omitted here use `defaultBedtime`.
+   */
+  bedtimeByWeekday: Record<string, string>;
   alcohol: AlcoholEffectConfig;
   caffeine: CaffeineEffectConfig;
   hydration: HydrationEffectConfig;
@@ -120,7 +127,11 @@ export interface ConsumptionEffectsConfig {
 
 export const DEFAULT_CONSUMPTION_EFFECTS_CONFIG: ConsumptionEffectsConfig = {
   timeZone: 'America/Chicago',
-  defaultBedtime: '23:00',
+  defaultBedtime: '21:30',
+  /** Parkour night. Other weekdays use defaultBedtime. */
+  bedtimeByWeekday: {
+    tuesday: '22:15',
+  },
   alcohol: {
     ozEthanolPerStandardDrink: 0.6,
     clearanceDrinksPerHour: 1,
@@ -242,9 +253,52 @@ function numOrNull(raw: string | undefined): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+const WEEKDAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'] as const;
+
+/** Canonical weekday, or null when the key is ambiguous or unknown. */
+export function canonicalWeekday(key: string): string | null {
+  const k = key.trim().toLowerCase();
+  if (/^[0-6]$/.test(k)) return WEEKDAY_NAMES[Number(k)];
+  if (k.length < 3) return null;
+  const hits = WEEKDAY_NAMES.filter(name => name.startsWith(k));
+  return hits.length === 1 ? hits[0] : null;
+}
+
+function normalizeHHMM(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const match = /^(\d{1,2}):(\d{2})/.exec(raw.trim());
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour > 23 || minute > 59) return null;
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+/** Drop unknown weekdays and invalid times. Later duplicate keys win. */
+export function normalizeBedtimeByWeekday(raw: unknown): Record<string, string> | null {
+  if (!isPlainObject(raw)) return null;
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    const day = canonicalWeekday(key);
+    const hhmm = normalizeHHMM(value);
+    if (day && hhmm) out[day] = hhmm;
+  }
+  return out;
+}
+
 function applyEnv(cfg: ConsumptionEffectsConfig): void {
   if (process.env.APP_TIMEZONE) cfg.timeZone = process.env.APP_TIMEZONE;
-  if (process.env.CONSUMPTION_BEDTIME) cfg.defaultBedtime = process.env.CONSUMPTION_BEDTIME;
+  const bedtime = normalizeHHMM(process.env.CONSUMPTION_BEDTIME);
+  if (bedtime) cfg.defaultBedtime = bedtime;
+  const weekdayRaw = process.env.CONSUMPTION_BEDTIME_BY_WEEKDAY;
+  if (weekdayRaw) {
+    try {
+      const parsed = normalizeBedtimeByWeekday(JSON.parse(weekdayRaw));
+      if (parsed) cfg.bedtimeByWeekday = parsed;
+    } catch (err) {
+      console.warn('[CONSUMPTION] CONSUMPTION_BEDTIME_BY_WEEKDAY ignored:', err instanceof Error ? err.message : err);
+    }
+  }
   const weight = numOrNull(process.env.CONSUMPTION_BODYWEIGHT_LB);
   if (weight !== null) cfg.protein.bodyWeightLb = weight;
   const goalOz = numOrNull(process.env.CONSUMPTION_HYDRATION_GOAL_OZ);
@@ -254,7 +308,7 @@ function applyEnv(cfg: ConsumptionEffectsConfig): void {
   const rawJson = process.env.CONSUMPTION_EFFECTS_JSON;
   if (rawJson) {
     try {
-      deepMerge(cfg, JSON.parse(rawJson));
+      Object.assign(cfg, deepMerge(cfg, JSON.parse(rawJson)));
     } catch (err) {
       console.warn('[CONSUMPTION] CONSUMPTION_EFFECTS_JSON ignored:', err instanceof Error ? err.message : err);
     }
@@ -266,7 +320,10 @@ export function resolveConsumptionConfig(
 ): ConsumptionEffectsConfig {
   const cfg = structuredClone(DEFAULT_CONSUMPTION_EFFECTS_CONFIG);
   applyEnv(cfg);
-  if (overrides) deepMerge(cfg, overrides);
+  if (overrides) Object.assign(cfg, deepMerge(cfg, overrides));
+  const bedtime = normalizeHHMM(cfg.defaultBedtime);
+  if (bedtime) cfg.defaultBedtime = bedtime;
+  cfg.bedtimeByWeekday = normalizeBedtimeByWeekday(cfg.bedtimeByWeekday) ?? {};
   return cfg;
 }
 

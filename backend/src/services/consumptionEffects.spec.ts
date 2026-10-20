@@ -1,5 +1,6 @@
 import { resolveConsumptionConfig } from '../config/consumptionEffects.config';
 import {
+  bedtimeForDate,
   hoursUntilBedtime,
   planConsumptionEffects,
   projectAlcohol,
@@ -19,7 +20,8 @@ import path from 'path';
 
 const cfg = resolveConsumptionConfig();
 const TZ = 'America/Chicago';
-const BED = '23:00';
+const TUESDAY = '2026-10-20';
+const WEDNESDAY = '2026-10-21';
 
 function millerDose(at: Date, hoursUntilBed: number): AlcoholDose {
   return {
@@ -42,56 +44,127 @@ describe('standard drinks', () => {
   });
 });
 
+describe('bedtime schedule', () => {
+  const envKeys = ['CONSUMPTION_BEDTIME', 'CONSUMPTION_BEDTIME_BY_WEEKDAY', 'CONSUMPTION_EFFECTS_JSON'] as const;
+  const saved: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    for (const key of envKeys) saved[key] = process.env[key];
+  });
+
+  afterEach(() => {
+    for (const key of envKeys) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  });
+
+  it('defaults to 21:30, with Tuesday lights-out at 22:15', () => {
+    expect(cfg.defaultBedtime).toBe('21:30');
+    expect(bedtimeForDate(TUESDAY, cfg)).toBe('22:15');
+    expect(bedtimeForDate(WEDNESDAY, cfg)).toBe('21:30');
+    expect(bedtimeForDate('2026-10-19', cfg)).toBe('21:30');
+  });
+
+  it('reads a weekday map from the environment and ignores a bad payload', () => {
+    process.env.CONSUMPTION_BEDTIME = '21:00';
+    process.env.CONSUMPTION_BEDTIME_BY_WEEKDAY = '{"tue":"22:45","nope":"99:99"}';
+    const tuned = resolveConsumptionConfig();
+    expect(tuned.defaultBedtime).toBe('21:00');
+    expect(bedtimeForDate(TUESDAY, tuned)).toBe('22:45');
+    expect(bedtimeForDate(WEDNESDAY, tuned)).toBe('21:00');
+
+    process.env.CONSUMPTION_BEDTIME_BY_WEEKDAY = '{';
+    expect(bedtimeForDate(TUESDAY, resolveConsumptionConfig())).toBe('22:15');
+  });
+
+  it('deep-merges CONSUMPTION_EFFECTS_JSON onto the weekday map', () => {
+    process.env.CONSUMPTION_BEDTIME_BY_WEEKDAY = '{"monday":"22:00"}';
+    process.env.CONSUMPTION_EFFECTS_JSON = '{"defaultBedtime":"21:15","bedtimeByWeekday":{"friday":"23:00"}}';
+    const tuned = resolveConsumptionConfig();
+    expect(tuned.defaultBedtime).toBe('21:15');
+    expect(bedtimeForDate('2026-10-19', tuned)).toBe('22:00');
+    expect(bedtimeForDate('2026-10-23', tuned)).toBe('23:00');
+    expect(bedtimeForDate(TUESDAY, tuned)).toBe('21:15');
+  });
+
+  it('lets a caller override add a weekday without dropping Tuesday', () => {
+    const caller = resolveConsumptionConfig({ bedtimeByWeekday: { sunday: '22:30' } });
+    expect(caller.defaultBedtime).toBe('21:30');
+    expect(bedtimeForDate('2026-10-18', caller)).toBe('22:30');
+    expect(bedtimeForDate(TUESDAY, caller)).toBe('22:15');
+  });
+});
+
 describe('Miller Lite versus bedtime', () => {
-  const at7 = new Date('2026-10-20T19:00:00-05:00');
-  const at945 = new Date('2026-10-20T21:45:00-05:00');
+  function shadow(iso: string, bed: string) {
+    const at = new Date(iso);
+    const hours = hoursUntilBedtime(at, bed, TZ);
+    return projectAlcohol([millerDose(at, hours)], at, cfg)!;
+  }
 
-  it('places 7:00 PM 4h before a 23:00 bedtime and 9:45 PM 1.25h before it', () => {
-    expect(hoursUntilBedtime(at7, BED, TZ)).toBeCloseTo(4, 5);
-    expect(hoursUntilBedtime(at945, BED, TZ)).toBeCloseTo(1.25, 5);
+  it('on Tuesday (bed 22:15) a 7:00 PM beer is milder than the same beer at 9:45 PM', () => {
+    const early = shadow(`${TUESDAY}T19:00:00-05:00`, '22:15');
+    expect(early.name).toBe('Alcohol Shadow');
+    expect(early.dose).toBe('0.84 standard drinks');
+    expect(early.source).toContain('Miller Lite (12 oz)');
+    expect(early.source).toContain('4.2% ABV');
+    expect(early.source).toContain('3.25h before bedtime');
+    expect(stat(early, 'Sleep Quality')).toBe('-5%');
+    expect(stat(early, 'Recovery Rate')).toBe('-4%');
+    expect(stat(early, 'XP Consolidation')).toBe('-3%');
+    expect(stat(early, 'Testosterone')).toBe('-2%');
+    expect(stat(early, 'Pleasure / Social Freedom')).toBe('+Mild');
+    expect(early.duration).toBe(160);
+    expect(early.autoApplied).toBe(true);
+    expect(early.effectKey).toBe('alcohol');
+
+    const late = shadow(`${TUESDAY}T21:45:00-05:00`, '22:15');
+    expect(late.dose).toBe('0.84 standard drinks');
+    expect(late.source).toContain('0.5h before bedtime');
+    expect(stat(late, 'Sleep Quality')).toBe('-10%');
+    expect(stat(late, 'Recovery Rate')).toBe('-8%');
+    expect(stat(late, 'XP Consolidation')).toBe('-5%');
+    expect(stat(late, 'Testosterone')).toBe('-4%');
+    expect(stat(late, 'Pleasure / Social Freedom')).toBe('+Mild');
+    expect(late.duration).toBe(270);
   });
 
-  it('makes one light beer at 7 PM a mild, short Alcohol Shadow', () => {
-    const draft = projectAlcohol([millerDose(at7, 4)], at7, cfg);
-    expect(draft).not.toBeNull();
-    expect(draft!.name).toBe('Alcohol Shadow');
-    expect(draft!.dose).toBe('0.84 standard drinks');
-    expect(draft!.source).toContain('Miller Lite (12 oz)');
-    expect(draft!.source).toContain('4.2% ABV');
-    expect(draft!.source).toContain('4h before bedtime');
-    expect(stat(draft, 'Sleep Quality')).toBe('-4%');
-    expect(stat(draft, 'Recovery Rate')).toBe('-3%');
-    expect(stat(draft, 'XP Consolidation')).toBe('-2%');
-    expect(stat(draft, 'Testosterone')).toBe('-2%');
-    expect(stat(draft, 'Pleasure / Social Freedom')).toBe('+Mild');
-    expect(draft!.duration).toBe(130);
-    expect(draft!.autoApplied).toBe(true);
-    expect(draft!.effectKey).toBe('alcohol');
+  it('on a normal weekday (bed 21:30) 7:00 PM is heavier, and 9:45 PM is a nightcap', () => {
+    const early = shadow(`${WEDNESDAY}T19:00:00-05:00`, '21:30');
+    expect(hoursUntilBedtime(new Date(`${WEDNESDAY}T19:00:00-05:00`), '21:30', TZ)).toBeCloseTo(2.5, 5);
+    expect(early.source).toContain('2.5h before bedtime');
+    expect(stat(early, 'Sleep Quality')).toBe('-7%');
+    expect(stat(early, 'Recovery Rate')).toBe('-5%');
+    expect(stat(early, 'XP Consolidation')).toBe('-3%');
+    expect(stat(early, 'Testosterone')).toBe('-3%');
+    expect(stat(early, 'Pleasure / Social Freedom')).toBe('+Mild');
+    expect(early.duration).toBe(190);
+
+    const lateAt = new Date(`${WEDNESDAY}T21:45:00-05:00`);
+    expect(hoursUntilBedtime(lateAt, '21:30', TZ)).toBe(0);
+    const late = shadow(`${WEDNESDAY}T21:45:00-05:00`, '21:30');
+    expect(late.source).toContain('at or after bedtime');
+    expect(stat(late, 'Sleep Quality')).toBe('-11%');
+    expect(stat(late, 'Recovery Rate')).toBe('-8%');
+    expect(stat(late, 'XP Consolidation')).toBe('-5%');
+    expect(stat(late, 'Testosterone')).toBe('-4%');
+    expect(stat(late, 'Pleasure / Social Freedom')).toBe('+Mild');
+    expect(late.duration).toBe(290);
   });
 
-  it('makes the same beer at 9:45 PM a heavier, longer Alcohol Shadow', () => {
-    const draft = projectAlcohol([millerDose(at945, 1.25)], at945, cfg);
-    expect(draft!.dose).toBe('0.84 standard drinks');
-    expect(draft!.source).toContain('1.25h before bedtime');
-    expect(stat(draft, 'Sleep Quality')).toBe('-9%');
-    expect(stat(draft, 'Recovery Rate')).toBe('-7%');
-    expect(stat(draft, 'XP Consolidation')).toBe('-5%');
-    expect(stat(draft, 'Testosterone')).toBe('-4%');
-    expect(stat(draft, 'Pleasure / Social Freedom')).toBe('+Mild');
-    expect(draft!.duration).toBe(240);
-  });
-
-  it('merges a second beer into one heavier effect instead of a second row', () => {
-    const later = new Date('2026-10-20T21:45:00-05:00');
+  it('merges a second Tuesday beer into one heavier effect instead of a second row', () => {
+    const bed = bedtimeForDate(TUESDAY, cfg);
+    const later = new Date(`${TUESDAY}T21:45:00-05:00`);
     const earlier = new Date(later.getTime() - 20 * 60 * 1000);
     const doses = [
-      millerDose(earlier, hoursUntilBedtime(earlier, BED, TZ)),
-      millerDose(later, hoursUntilBedtime(later, BED, TZ)),
+      millerDose(earlier, hoursUntilBedtime(earlier, bed, TZ)),
+      millerDose(later, hoursUntilBedtime(later, bed, TZ)),
     ];
     const draft = projectAlcohol(doses, later, cfg);
     expect(draft!.effectKey).toBe('alcohol');
     expect(Number(draft!.dose.split(' ')[0])).toBeGreaterThan(0.84);
-    expect(parseInt(stat(draft, 'Sleep Quality')!.replace('%', ''), 10)).toBeLessThan(-9);
+    expect(parseInt(stat(draft, 'Sleep Quality')!.replace('%', ''), 10)).toBeLessThan(-10);
   });
 });
 
@@ -154,7 +227,7 @@ describe('other consumption effects', () => {
       supplements: [{ key: 'creatine', amount: 10, unit: 'g' }, { key: 'fish-oil', amount: 1, unit: 'g' }],
     }, {
       now: morning,
-      bedtime: BED,
+      bedtime: '21:30',
       timeZone: TZ,
       hydrationOz: 80,
       proteinGrams: 40,

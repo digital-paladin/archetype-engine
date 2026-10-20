@@ -135,6 +135,42 @@ describe('logConsumption', () => {
     expect(logged.abstinencePrompt).toBeNull();
   });
 
+  it('uses Tuesday 22:15 and a normal weekday 21:30 unless the request sets bedtime', async () => {
+    const tuesday = await logConsumption(userId, {
+      itemName: 'Miller Lite (12 oz)',
+      alcohol: { volumeOz: 12, abvPercent: 4.2 },
+      consumedAt: '2026-10-20T19:00:00-05:00',
+      clientDate: '2026-10-20',
+    }, { journal });
+    const tuesdayShadow = tuesday.effects.find(e => e.effectKey === 'alcohol');
+    expect(tuesdayShadow?.source).toContain('3.25h before bedtime');
+    expect(tuesdayShadow?.effects.find(s => s.stat === 'Sleep Quality')?.modifier).toBe('-5%');
+    expect(tuesdayShadow?.duration).toBe(160);
+
+    const explicit = await logConsumption('other-player', {
+      idempotencyKey: 'beer-explicit',
+      itemName: 'Miller Lite (12 oz)',
+      alcohol: { volumeOz: 12, abvPercent: 4.2 },
+      consumedAt: '2026-10-20T19:00:00-05:00',
+      clientDate: '2026-10-20',
+      bedtime: '23:00',
+    }, { journal });
+    const explicitShadow = explicit.effects.find(e => e.effectKey === 'alcohol');
+    expect(explicitShadow?.source).toContain('4h before bedtime');
+    expect(explicitShadow?.effects.find(s => s.stat === 'Sleep Quality')?.modifier).toBe('-4%');
+
+    const wednesday = await logConsumption(userId, {
+      itemName: 'Miller Lite (12 oz)',
+      alcohol: { volumeOz: 12, abvPercent: 4.2 },
+      consumedAt: '2026-10-21T21:45:00-05:00',
+      clientDate: '2026-10-21',
+    }, { journal });
+    const nightcap = wednesday.effects.find(e => e.effectKey === 'alcohol');
+    expect(nightcap?.source).toContain('at or after bedtime');
+    expect(nightcap?.effects.find(s => s.stat === 'Sleep Quality')?.modifier).toBe('-11%');
+    expect(nightcap?.duration).toBe(290);
+  });
+
   it('uses yesterday sleep_start as bedtime when tonight is not logged yet', async () => {
     journal.rows.set(`${userId}:2026-10-19`, {
       user_id: userId,
