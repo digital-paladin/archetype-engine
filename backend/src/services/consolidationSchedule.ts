@@ -1,6 +1,6 @@
 /**
  * UTC calendar helpers for nightly consolidation.
- * activity_log windows already use `${date}T00:00:00Z`–`23:59:59Z`.
+ * activity_log windows use utcDayBounds() (`T00:00:00.000Z`–`T23:59:59.999Z`).
  */
 export const DEFAULT_CONSOLIDATION_STREAK_DAYS = 690;
 export const CONSOLIDATION_CRON_EXPR = '5 0 * * *';

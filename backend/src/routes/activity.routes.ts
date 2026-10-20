@@ -1,12 +1,13 @@
 import { Router, Request, Response } from 'express';
 import { Server as SocketIOServer } from 'socket.io';
 import { XpCalculatorService } from '../services/xpCalculator.service';
-import { pushLog, getLogs } from '../services/activityLogStore';
+import { pushLog, getLogs, mergeActivityFeed, toActivityFeedEntry } from '../services/activityLogStore';
 import { recordActivitySession, applyCourageFlag } from '../services/courage.service';
 import { getDataService } from '../services/data/dataService';
 import { getActiveBodyStatuses } from '../services/bodyStatus.service';
 import { persistClassXpAwards, toCanonicalClassName } from '../services/xpAward.service';
 import { emitToUser } from '../realtime/userEmit';
+import { ActivityWhenError, resolveActivityWhen } from '../services/activityOccurredAt';
 
 const router = Router();
 
@@ -90,15 +91,31 @@ router.post('/', async (req: Request, res: Response) => {
       console.log(`[ACTIVITY] Body-status XP penalty applied: -${xpPenaltyPct}% (${rawXp} → ${xp})`);
     }
 
+    // Occurred time is resolved after XP math and before any write. A bad
+    // date is a 400 and does not touch the log. Today (UTC or Chicago) and
+    // an omitted date stay on the request clock; a past day is stored on
+    // that day. See activityOccurredAt.ts for the 90-day / 15-minute rules.
+    const { date, occurredAt, startTime } = req.body;
+    let when;
+    try {
+      when = resolveActivityWhen({ occurredAt, startTime, date, clientDate });
+    } catch (whenErr) {
+      if (whenErr instanceof ActivityWhenError) {
+        return res.status(400).json({ error: whenErr.message });
+      }
+      throw whenErr;
+    }
+
     // ── Courage XP calculation (session bonus + optional flag) ──────────────
     const sessionCourageXP = recordActivitySession(activityType);
-    const flagCourageXP    = courageFlag === true ? applyCourageFlag(activityType, courageNote) : 0;
+    const flagCourageXP    = courageFlag === true ? applyCourageFlag(activityType, courageNote, when.date) : 0;
     const courageXPAwarded = sessionCourageXP + flagCourageXP;
 
     // Push to in-memory log and emit real-time update
     const source = activityType.startsWith('Combo:') ? 'combo' as const : 'skill' as const;
     const logEntry = pushLog({
       activityType, xp, duration, notes, category, source,
+      timestamp: when.loggedAt,
       courageFlag: courageFlag === true || undefined,
       courageNote: courageNote || undefined,
       courageXPAwarded: courageXPAwarded > 0 ? courageXPAwarded : undefined,
@@ -107,19 +124,20 @@ router.post('/', async (req: Request, res: Response) => {
 
     // ── Supabase writes (non-blocking — failure must not block the HTTP response) ──
     if (userId) {
-      const dateStr = clientDate || new Date().toLocaleDateString('en-CA');
+      const dateStr = when.date;
       setImmediate(async () => {
         try {
           const db   = getDataService();
 
-          // 1. Persist activity entry to Supabase activity_log
+          // 1. Persist activity entry to Supabase activity_log.
+          // logged_at is the resolved activity time, so per-day windows count it on when.date.
           await db.logActivity(userId, {
             activity_type:  activityType,
             class_name:     toCanonicalClassName(category),
             duration_hours: duration ? +(duration / 60).toFixed(2) : undefined,
             xp_awarded:     xp,
             notes:          notes || undefined,
-            logged_at:      new Date().toISOString(),
+            logged_at:      when.loggedAt,
           });
 
           // 2. Apply XP through the shared character_stats path (also used by System quests).
@@ -160,6 +178,9 @@ router.post('/', async (req: Request, res: Response) => {
       activityType,
       duration,
       xpAwards: finalXpAwards,
+      date: when.date,
+      occurredAt: when.occurredAt,
+      loggedAt: when.loggedAt,
       message: `Activity logged successfully! +${xp} XP`,
       ...(xpPenaltyPct > 0 && { xpPenaltyPct }),
       ...(courageXPAwarded > 0 && { courageXPAwarded, courageMessage: `+${courageXPAwarded} Courage XP earned!` }),
@@ -174,12 +195,58 @@ router.post('/', async (req: Request, res: Response) => {
   }
 });
 
+const DEFAULT_ACTIVITY_LIMIT = 200;
+const MAX_ACTIVITY_LIMIT = 200;
+
 /**
  * GET /api/activities
- * Return the in-memory activity log (most-recent-first)
+ * Persistent activity_log for the signed-in user, newest first.
+ * Optional `date=YYYY-MM-DD` limits the list to that UTC day.
+ * Optional `limit` (1–200, default 200).
+ * In-memory consume/water rows (not stored in activity_log) are merged in.
+ * A failed database read falls back to the in-memory list.
  */
-router.get('/', (req: Request, res: Response) => {
-  res.json(getLogs());
+router.get('/', async (req: Request, res: Response) => {
+  try {
+    const userId = (req as Request & { userId?: string }).userId;
+    const dateQuery = typeof req.query.date === 'string' ? req.query.date.trim() : undefined;
+    if (dateQuery && !/^\d{4}-\d{2}-\d{2}$/.test(dateQuery)) {
+      return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+    }
+
+    let limit = DEFAULT_ACTIVITY_LIMIT;
+    if (req.query.limit != null && req.query.limit !== '') {
+      const parsed = Number(req.query.limit);
+      if (!Number.isInteger(parsed) || parsed < 1 || parsed > MAX_ACTIVITY_LIMIT) {
+        return res.status(400).json({
+          error: `limit must be an integer from 1 to ${MAX_ACTIVITY_LIMIT}`,
+        });
+      }
+      limit = parsed;
+    }
+
+    const memory = getLogs().filter(entry => !dateQuery || entry.timestamp.slice(0, 10) === dateQuery);
+    if (!userId) {
+      return res.json(memory.slice(0, limit));
+    }
+
+    try {
+      const rows = await getDataService().getActivityLog(userId, limit, dateQuery);
+      const persisted = rows.map((row, index) => toActivityFeedEntry(row, index));
+      return res.json(mergeActivityFeed(persisted, memory, limit));
+    } catch (dbErr) {
+      console.error(
+        '[ACTIVITY] GET persistent log failed, falling back to in-memory:',
+        dbErr instanceof Error ? dbErr.message : dbErr,
+      );
+      return res.json(memory.slice(0, limit));
+    }
+  } catch (error) {
+    res.status(500).json({
+      error: 'Failed to fetch activities',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
 });
 
 /**

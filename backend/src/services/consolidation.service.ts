@@ -20,6 +20,7 @@ import {
   previousUtcDate,
   xpHistoryCoversDate,
 } from './consolidationSchedule';
+import { utcDayBounds } from './activityOccurredAt';
 
 export interface ConsolidationClassResult {
   className:   string;
@@ -61,13 +62,16 @@ export class ConsolidationService {
     const db       = getDataService();
     const supabase = getSupabaseAdmin();
 
-    // 1. Sum today's pending XP per class from activity_log
+    // 1. Sum this day's pending XP per class from activity_log.
+    // Backfilled activities are stored so logged_at's UTC date is the day the
+    // client named (noon UTC for a date-only past day). This window is that day.
+    const bounds = utcDayBounds(date);
     const { data: actLogs, error: actErr } = await supabase
       .from('activity_log')
       .select('class_name, xp_awarded')
       .eq('user_id', userId)
-      .gte('logged_at', `${date}T00:00:00Z`)
-      .lte('logged_at', `${date}T23:59:59Z`);
+      .gte('logged_at', bounds.start)
+      .lte('logged_at', bounds.end);
 
     if (actErr) throw new Error(`activity_log query: ${actErr.message}`);
 

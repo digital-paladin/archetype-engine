@@ -224,6 +224,22 @@ describe('quest resolution', () => {
     expect(JSON.stringify(second.body)).not.toContain('99999');
   });
 
+  it('writes cleared quest XP on scheduledFor when that day is in the past', async () => {
+    const past = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const created = await request(userApp()).post('/api/system/quests').send(daily({
+      idempotencyKey: 'backfill-day',
+      scheduledFor: past,
+      title: 'Easy walk',
+    }));
+    expect(created.status).toBe(201);
+
+    const cleared = await request(userApp()).post(`/api/system/quests/${created.body.quest.id}/clear`).send({});
+    expect(cleared.status).toBe(200);
+    expect(mockLogActivity).toHaveBeenCalledWith('paul', expect.objectContaining({
+      logged_at: `${past}T12:00:00.000Z`,
+    }));
+  });
+
   it('applies the stored penalty exactly once when the quest fails', async () => {
     const created = await request(userApp())
       .post('/api/system/quests')

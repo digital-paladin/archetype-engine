@@ -10,6 +10,7 @@ import {
   QuestLineEntry, GrandConvergenceData, BodyStatusRow,
 } from './IDataService';
 import { fitbitTokensFromRow, fitbitTokensUpsertRow } from './fitbitTokenRow';
+import { utcDayBounds } from '../activityOccurredAt';
 
 export class SupabaseDataService implements IDataService {
   private readonly db: SupabaseClient;
@@ -178,11 +179,16 @@ export class SupabaseDataService implements IDataService {
     if (error) throw error;
   }
 
-  async getActivityLog(userId: string, limit = 50): Promise<ActivityEntry[]> {
-    const { data, error } = await this.db
+  async getActivityLog(userId: string, limit = 50, onDate?: string): Promise<ActivityEntry[]> {
+    let query = this.db
       .from('activity_log')
       .select('*')
-      .eq('user_id', userId)
+      .eq('user_id', userId);
+    if (onDate) {
+      const bounds = utcDayBounds(onDate);
+      query = query.gte('logged_at', bounds.start).lte('logged_at', bounds.end);
+    }
+    const { data, error } = await query
       .order('logged_at', { ascending: false })
       .limit(limit);
     if (error) throw error;

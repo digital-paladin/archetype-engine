@@ -13,6 +13,7 @@ import {
 import { emitToUser } from '../realtime/userEmit';
 import { getDataService } from './data/dataService';
 import { getSystemQuestStore, newQuestId } from './systemQuest.store';
+import { ActivityWhenError, resolveActivityWhen } from './activityOccurredAt';
 import { persistClassXpAwards } from './xpAward.service';
 
 let io: SocketIOServer | null = null;
@@ -162,13 +163,30 @@ export async function createSystemQuest(
   return { quest: presented, created: true, idempotentReplay: false, warning: normalized.warning };
 }
 
+/** Quest XP lands on scheduledFor when that day is a valid activity day; otherwise now. */
+function questActivityWhen(quest: SystemQuestRecord) {
+  if (!quest.scheduledFor) return resolveActivityWhen({});
+  try {
+    return resolveActivityWhen({ date: quest.scheduledFor });
+  } catch (err) {
+    if (err instanceof ActivityWhenError) {
+      console.warn(
+        `[SYSTEM] scheduledFor ${quest.scheduledFor} is not a usable activity day (${err.message}); using request time`,
+      );
+      return resolveActivityWhen({});
+    }
+    throw err;
+  }
+}
+
 async function commitXp(userId: string, planned: ClassXp[], quest: SystemQuestRecord): Promise<ClassXp[]> {
+  const when = questActivityWhen(quest);
   const applied = await persistClassXpAwards(userId, planned, {
     onLevelUp: ({ className, newLevel }) => {
       emitToUser(io, userId, 'level-up', {
         class: className,
         newLevel,
-        date: new Date().toLocaleDateString('en-CA'),
+        date: when.date,
         source: 'system-quest',
         questId: quest.id,
       });
@@ -182,7 +200,7 @@ async function commitXp(userId: string, planned: ClassXp[], quest: SystemQuestRe
       class_name: applied[0]?.className ?? 'Sage',
       xp_awarded: total,
       notes: `system-quest:${quest.id}`,
-      logged_at: new Date().toISOString(),
+      logged_at: when.loggedAt,
     });
   } catch (err) {
     console.error('[SYSTEM] activity log write failed:', err instanceof Error ? err.message : err);

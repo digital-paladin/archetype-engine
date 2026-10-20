@@ -193,26 +193,33 @@ export function recordActivitySession(activityType: string): number {
 
 /**
  * Apply the manual courage-flag bonus (+10 XP, capped 1× per calendar day).
- * Returns XP awarded (0 if already flagged today).
+ * `onDate` is the activity's calendar day (YYYY-MM-DD). Backfilled activities
+ * count against that day, not the request day. Returns XP awarded (0 if that
+ * day was already flagged).
  */
-export function applyCourageFlag(activityType: string, note?: string): number {
+export function applyCourageFlag(activityType: string, note?: string, onDate?: string): number {
   if (!data) loadFromDisk();
-  const today = new Date().toLocaleDateString('en-CA');
-  if (data!.lastFlagDate === today) {
-    console.log(`[COURAGE] Flag already awarded today (${today}) — skipping`);
+  const day = onDate && /^\d{4}-\d{2}-\d{2}$/.test(onDate)
+    ? onDate
+    : new Date().toLocaleDateString('en-CA');
+  const already = data!.flagLog.some(flag => flag.date === day) || data!.lastFlagDate === day;
+  if (already) {
+    console.log(`[COURAGE] Flag already awarded on ${day} — skipping`);
     return 0;
   }
   const entry: CourageFlagEntry = {
     id: randomUUID(),
-    date: today,
+    date: day,
     activityType,
     xp: COURAGE_FLAG_XP,
     note,
   };
   data!.flagLog.push(entry);
   data!.totalXP += COURAGE_FLAG_XP;
-  data!.lastFlagDate = today;
-  console.log(`[COURAGE] Flag XP — ${activityType}: +${COURAGE_FLAG_XP} XP`);
+  if (!data!.lastFlagDate || day > data!.lastFlagDate) {
+    data!.lastFlagDate = day;
+  }
+  console.log(`[COURAGE] Flag XP — ${activityType} @ ${day}: +${COURAGE_FLAG_XP} XP`);
   saveToDisk();
   return COURAGE_FLAG_XP;
 }
