@@ -1,21 +1,27 @@
 /**
- * Abstinence streak routes (Phase 2.10 / Sprint S5)
+ * Abstinence streak routes (Phase 2.10 / Sprint S5; scheduling added Phase 3)
  *
- * GET  /api/abstinence/streaks
- * POST /api/abstinence/break
- * POST /api/abstinence/daily-increment   (cron / admin-style; auth required)
- * POST /api/abstinence/resistance-event
- * GET  /api/abstinence/resistance-events?item_index=
+ * GET   /api/abstinence/streaks
+ * POST  /api/abstinence/break
+ * POST  /api/abstinence/daily-increment   (cron / admin-style; auth required)
+ * POST  /api/abstinence/resistance-event
+ * GET   /api/abstinence/resistance-events?item_index=
+ * POST  /api/abstinence/:itemIndex/schedule
+ * GET   /api/abstinence/:itemIndex/schedule
+ * PATCH /api/abstinence/:itemIndex/schedule/:scheduledId/resolve
  */
 
 import { Router, Request, Response } from 'express';
 import { isAbstinenceItem } from '../config/acm.config';
 import {
   getResistanceEvents,
+  getScheduledIndulgences,
   getStreaksForUser,
   logBreak,
   logResistanceEvent,
+  resolveScheduledIndulgence,
   runDailyIncrement,
+  scheduleIndulgence,
   todayChicago,
 } from '../services/abstinence.service';
 
@@ -124,6 +130,95 @@ router.get('/resistance-events', async (req: Request, res: Response) => {
     const msg = e instanceof Error ? e.message : 'Unknown error';
     console.error('GET /api/abstinence/resistance-events error:', msg);
     return res.status(500).json({ success: false, error: msg });
+  }
+});
+
+function parseItemIndexParam(req: Request): number | null {
+  const itemIndex = Number(req.params?.itemIndex);
+  if (!Number.isInteger(itemIndex) || !isAbstinenceItem(itemIndex)) return null;
+  return itemIndex;
+}
+
+router.post('/:itemIndex/schedule', async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).userId as string;
+    const itemIndex = parseItemIndexParam(req);
+    if (itemIndex === null) {
+      return res.status(400).json({
+        success: false,
+        error: 'itemIndex path param must be an abstinence ACM index (0 or 10)',
+      });
+    }
+
+    const streak = await scheduleIndulgence({
+      userId,
+      itemIndex,
+      scheduledDate: String(req.body?.scheduled_date ?? ''),
+      estimatedType: String(req.body?.estimated_type ?? ''),
+      estimatedCount: Number(req.body?.estimated_count),
+      notes: typeof req.body?.notes === 'string' ? req.body.notes : undefined,
+    });
+    return res.json({ success: true, streak });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'Unknown error';
+    const status = /required|must be|max 280|not an abstinence/i.test(msg) ? 400 : 500;
+    console.error('POST /api/abstinence/:itemIndex/schedule error:', msg);
+    return res.status(status).json({ success: false, error: msg });
+  }
+});
+
+router.get('/:itemIndex/schedule', async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).userId as string;
+    const itemIndex = parseItemIndexParam(req);
+    if (itemIndex === null) {
+      return res.status(400).json({
+        success: false,
+        error: 'itemIndex path param must be an abstinence ACM index (0 or 10)',
+      });
+    }
+    const scheduled_breaks = await getScheduledIndulgences(userId, itemIndex);
+    return res.json({ success: true, item_index: itemIndex, scheduled_breaks });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'Unknown error';
+    console.error('GET /api/abstinence/:itemIndex/schedule error:', msg);
+    return res.status(500).json({ success: false, error: msg });
+  }
+});
+
+router.patch('/:itemIndex/schedule/:scheduledId/resolve', async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).userId as string;
+    const itemIndex = parseItemIndexParam(req);
+    if (itemIndex === null) {
+      return res.status(400).json({
+        success: false,
+        error: 'itemIndex path param must be an abstinence ACM index (0 or 10)',
+      });
+    }
+    const scheduledId = String(req.params?.scheduledId ?? '');
+
+    const result = await resolveScheduledIndulgence({
+      userId,
+      itemIndex,
+      scheduledId,
+      actualType: String(req.body?.actual_type ?? ''),
+      actualCount: Number(req.body?.actual_count),
+    });
+    return res.json({
+      success: true,
+      compound_break: result.compound_break,
+      already_broken_today: result.already_broken_today,
+      variance: result.variance,
+      streak: result.streak,
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'Unknown error';
+    const status = /required|must be|not found|already resolved|not an abstinence/i.test(msg)
+      ? 400
+      : 500;
+    console.error('PATCH /api/abstinence/:itemIndex/schedule/:scheduledId/resolve error:', msg);
+    return res.status(status).json({ success: false, error: msg });
   }
 });
 

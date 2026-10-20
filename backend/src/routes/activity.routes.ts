@@ -9,6 +9,8 @@ import {
   isRecoveryQuestType, validateRecoveryActivity, localDate, CLAIM_DATE_TAG,
   isRealIsoDate, mergeActivityLogs,
 } from '../services/recoveryQuests.service';
+import { persistClassXpAwards, toCanonicalClassName } from '../services/xpAward.service';
+import { emitToUser } from '../realtime/userEmit';
 
 /**
  * Recent activity_log window used to see training logged on a claimed day.
@@ -18,35 +20,6 @@ import {
 const RECOVERY_LOG_LOOKBACK = 2000;
 
 const router = Router();
-
-/**
- * Maps raw category names (from getCategoryFromActivity) and multi-class award names
- * (from multiClassXP entries, which use PascalCase) to canonical DB class_name values.
- */
-function toCanonicalClassName(rawClass: string): string {
-  const map: Record<string, string> = {
-    developer:              'Developer',
-    warrior:                'Warrior',
-    sage:                   'Sage',
-    artist:                 'Artist',
-    redteam:                'Redteamer',
-    redteamer:              'Redteamer',
-    financial:              'Financial Strategist',
-    'financial-strategist': 'Financial Strategist',
-    survivalist:            'Survivalist',
-    prayer:                 'Sage',   // prayer activities map to Sage XP
-    general:                'Sage',   // fallback
-    // PascalCase pass-through (from multiClassXP entries)
-    Developer:              'Developer',
-    Warrior:                'Warrior',
-    Sage:                   'Sage',
-    Artist:                 'Artist',
-    Redteamer:              'Redteamer',
-    'Financial Strategist': 'Financial Strategist',
-    Survivalist:            'Survivalist',
-  };
-  return map[rawClass] ?? (rawClass.charAt(0).toUpperCase() + rawClass.slice(1));
-}
 
 // Initialize services
 const xpCalculator = new XpCalculatorService();
@@ -179,9 +152,7 @@ router.post('/', async (req: Request, res: Response) => {
       courageNote: courageNote || undefined,
       courageXPAwarded: courageXPAwarded > 0 ? courageXPAwarded : undefined,
     });
-    if (io) {
-      io.emit('activity-logged', logEntry);
-    }
+    emitToUser(io, userId, 'activity-logged', logEntry);
 
     // ── Supabase writes (non-blocking — failure must not block the HTTP response) ──
     if (userId) {
@@ -189,7 +160,6 @@ router.post('/', async (req: Request, res: Response) => {
       setImmediate(async () => {
         try {
           const db   = getDataService();
-          const calc = new XpCalculatorService();
 
           // 1. Persist activity entry to Supabase activity_log
           await db.logActivity(userId, {
@@ -201,29 +171,17 @@ router.post('/', async (req: Request, res: Response) => {
             logged_at:      new Date().toISOString(),
           });
 
-          // 2. Apply XP to character_stats for each awarded class
-          const allStats = await db.getCharacterStats(userId);
-          for (const award of finalXpAwards) {
-            const canonClass = toCanonicalClassName(award.class);
-            const current    = allStats.find(s => s.class_name === canonClass);
-            const lvl        = current?.level ?? 1;
-            const currXP     = current?.current_xp ?? 0;
-            const totalXP    = current?.total_xp ?? 0;
-
-            const { newLevel, newCurrentXP, leveledUp } = calc.applyXPGain(lvl, currXP, award.xp);
-
-            await db.upsertCharacterStats(userId, {
-              class_name: canonClass,
-              level:      newLevel,
-              current_xp: newCurrentXP,
-              total_xp:   totalXP + award.xp,
-            });
-
-            if (leveledUp && io) {
-              io.emit('level-up', { class: canonClass, newLevel, date: dateStr });
-              console.log(`[ACTIVITY] 🎉 Level-up! ${canonClass} → L${newLevel}`);
-            }
-          }
+          // 2. Apply XP through the shared character_stats path (also used by System quests).
+          await persistClassXpAwards(
+            userId,
+            finalXpAwards.map(award => ({ className: award.class, xp: award.xp })),
+            {
+              onLevelUp: ({ className, newLevel }) => {
+                emitToUser(io, userId, 'level-up', { class: className, newLevel, date: dateStr });
+                console.log(`[ACTIVITY] 🎉 Level-up! ${className} → L${newLevel}`);
+              },
+            },
+          );
         } catch (dbErr) {
           // Upgraded from console.warn: this write happens after the HTTP response
           // has already been sent, so a swallowed failure here is otherwise
@@ -238,9 +196,7 @@ router.post('/', async (req: Request, res: Response) => {
             `xp=${xp} awards=${JSON.stringify(finalXpAwards)} — character_stats NOT updated:`,
             errMsg,
           );
-          if (io) {
-            io.emit('activity-write-failed', { activityType, xp, awards: finalXpAwards, error: errMsg });
-          }
+          emitToUser(io, userId, 'activity-write-failed', { activityType, xp, awards: finalXpAwards, error: errMsg });
         }
       });
     }

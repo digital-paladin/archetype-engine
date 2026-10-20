@@ -2,6 +2,7 @@ import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { environment } from '../environments/environment';
+import { SocketService } from './socket.service';
 
 interface AuthActionResponse {
   success: boolean;
@@ -29,7 +30,7 @@ export class AuthService {
   private readonly REFRESH_TOKEN_KEY = 'refresh_token';
   private readonly apiUrl = environment.apiUrl;
 
-  constructor(private http: HttpClient) {}
+  constructor(private http: HttpClient, private socket: SocketService) {}
 
   /**
    * Login with username and password
@@ -340,6 +341,7 @@ export class AuthService {
    */
   private setToken(token: string): void {
     localStorage.setItem(this.TOKEN_KEY, token);
+    this.rejoinRealtime();
   }
 
   /**
@@ -355,5 +357,14 @@ export class AuthService {
   private clearToken(): void {
     localStorage.removeItem(this.TOKEN_KEY);
     localStorage.removeItem(this.REFRESH_TOKEN_KEY);
+    this.rejoinRealtime();
+  }
+
+  private rejoinRealtime(): void {
+    try {
+      this.socket?.refreshAuth();
+    } catch {
+      // The HTTP session still stands if the socket cannot reconnect.
+    }
   }
 }

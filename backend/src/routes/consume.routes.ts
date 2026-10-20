@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { Server as SocketIOServer } from 'socket.io';
 import { getDataService } from '../services/data/dataService';
 import { pushLog } from '../services/activityLogStore';
+import { emitToUser } from '../realtime/userEmit';
 
 const router = Router();
 
@@ -67,7 +68,7 @@ router.post('/', async (req: Request, res: Response) => {
       ? `+${waterOz} oz`
       : [protein > 0 && `+${protein}g protein`, calories > 0 && `${calories} kcal`].filter(Boolean).join(' · ') || undefined;
     const logEntry   = pushLog({ activityType: itemName, xp: 0, notes: logNotes, source });
-    if (io) io.emit('activity-logged', logEntry);
+    emitToUser(io, userId, 'activity-logged', logEntry);
 
     return res.json({ success: true, message: `Consumed ${itemName}: +${protein}g protein, ${calories ?? 0} kcal logged` });
   } catch (error) {

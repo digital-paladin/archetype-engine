@@ -113,12 +113,18 @@ class HotbarStub {}
 @Component({ selector: 'app-loot-drop-overlay', standalone: true, template: '' })
 class LootStub {}
 
+@Component({ selector: 'app-system-window', standalone: true, template: '' })
+class SystemWindowStub {}
+
+@Component({ selector: 'app-system-notice', standalone: true, template: '' })
+class SystemNoticeStub {}
+
 const PANEL_STUBS = [
   CharacterDisplayStub, StatusEffectsStub, CharacterStatsStub, CollectionsStub, SkillsStub,
   BodyDiagramStub, SleepPanelStub, AcmStub, FoodLogStub, QuestsStub, AnalyticsStub,
   VaultStub, CourageStub, RewardsStub, TreasuryStub, BillingStub, IntegrationsStub,
   QuestLinesStub, InventoryStub, CraftingStub, TodoistStub, ActivitySessionStub,
-  HotbarStub, LootStub,
+  HotbarStub, LootStub, SystemWindowStub, SystemNoticeStub,
 ];
 
 describe('DashboardComponent Quick Log', () => {
@@ -132,7 +138,13 @@ describe('DashboardComponent Quick Log', () => {
         provideHttpClient(),
         provideHttpClientTesting(),
         provideRouter([]),
-        { provide: SocketService, useValue: { onXpProjectionUpdate: () => EMPTY } },
+        {
+          provide: SocketService,
+          useValue: {
+            onXpProjectionUpdate: () => EMPTY,
+            onSystemNotice: () => EMPTY,
+          },
+        },
         {
           provide: XpProjectionService,
           useValue: {

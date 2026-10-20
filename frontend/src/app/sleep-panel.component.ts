@@ -126,6 +126,9 @@ export interface VitalsData {
               <span class="wearable-sep">·</span>
               <a [href]="fitbitAuthUrl" class="fitbit-link">Fitbit Web API (legacy) →</a>
             </p>
+            <p class="wearable-disclosure">
+              Archetype Engine reads your Fitbit and Pixel Watch sleep, activity, heart rate, and nutrition from Google Health to fill your journal, sleep score, and daily metrics. It does not sell this data.
+            </p>
           </div>
         </section>
       </ng-template>
@@ -715,6 +718,13 @@ export interface VitalsData {
     }
     .fitbit-link:hover { text-decoration: underline; }
     .wearable-sep { margin: 0 0.35rem; opacity: 0.6; }
+    .wearable-disclosure {
+      margin: 0.75rem auto 0;
+      max-width: 36rem;
+      font-size: 0.75rem;
+      line-height: 1.45;
+      color: var(--eso-text-dim, #8a7a5a);
+    }
 
     /* Vitality bar colors (reuse dashboard classes) */
     .eso-bar-vitality-high    { background: linear-gradient(90deg, #6fcf97, #27ae60) !important; }

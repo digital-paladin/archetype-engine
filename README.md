@@ -87,8 +87,8 @@ This system occupies the gap: *you define the archetype, the system holds you ac
 
 ### Integrations (optional)
 - **Oura** — primary wearable (sleep + readiness)
-- **Google Health API** — Fitbit / Pixel Watch sleep (replaces Fitbit Web API, sunset Sep 2026)
-- **Fitbit Web API** — legacy fallback until re-consent
+- **Google Health API v4** — Fitbit / Pixel Watch sleep, activity, heart rate, nutrition, and vitals (replaces Fitbit Web API, shutdown 2026-10-30)
+- **Fitbit Web API** — legacy fallback until `FITBIT_DATA_SOURCE=google` (see MIGRATION.md)
 - **Todoist** — AI agent task creation and management
 - **GitHub sync** — journal and character sheet backup via GitHub API
 
@@ -265,28 +265,33 @@ The character panel uses a Mixamo GLB model with animation blending via Three.js
 
 ---
 
-## Wearable Integration (sleep)
+## Wearable Integration (sleep, activity, nutrition, vitals)
 
-Cascade: **Oura → Google Health (Fitbit / Pixel Watch) → legacy Fitbit Web API → journal cache**.
+Cascade for sleep: **Oura → Google Health (Fitbit / Pixel Watch) → legacy Fitbit Web API → journal cache**.
+
+Activity, nutrition, and vitals still arrive on `/api/fitbit/*`. With `FITBIT_DATA_SOURCE=auto` (the default) those routes use Google Health API v4 when that user has connected it, and the legacy Fitbit Web API otherwise. The journal columns (`fitbit_score`, `sleep_hours`, `protein_level`, `hydration_oz`) do not change, so XP consolidation and the ACM sleep bonus stay the same.
+
+The full cutover — env vars, Restricted OAuth scopes, Cloud Console steps, and the verification the owner must finish — is in [MIGRATION.md](MIGRATION.md). Google shuts the Fitbit Web API down on **2026-10-30**.
 
 ### Google Health API (Fitbit / Pixel Watch)
 
 1. [Google Cloud Console](https://console.cloud.google.com) — enable **Google Health API**
-2. OAuth consent screen (Testing is fine for Owner-only)
+2. OAuth consent screen. Testing mode is enough for the owner; public use needs Restricted-scope verification (see MIGRATION.md).
 3. Create a **Web application** OAuth client. Redirect URIs:
    - `http://localhost:3000/api/google-health/callback`
    - `https://YOUR-RAILWAY-HOST/api/google-health/callback`
-4. Set on Railway / local `.env`: `GOOGLE_HEALTH_CLIENT_ID`, `GOOGLE_HEALTH_CLIENT_SECRET`, `GOOGLE_HEALTH_REDIRECT_URI`
+4. Set on Railway / local `.env`: `GOOGLE_HEALTH_CLIENT_ID`, `GOOGLE_HEALTH_CLIENT_SECRET`, `GOOGLE_HEALTH_REDIRECT_URI`. Do not commit the secret.
 5. Apply `supabase/migrations/005_google_health_provider.sql`
 6. Sleep panel → **Fitbit / Pixel Watch (Google Health)** (must be signed in)
 
 `/api/google-health/callback` is intentionally unprotected — OAuth redirects cannot carry a JWT. Legacy Fitbit tokens do **not** transfer; you must re-consent with the Google account that owns the Fitbit data.
 
-### Legacy Fitbit Web API (sunset Sep 2026)
+### Legacy Fitbit Web API (shutdown 2026-10-30)
 
 1. Register at [dev.fitbit.com](https://dev.fitbit.com) — Personal App, OAuth 2.0
 2. Set `FITBIT_CLIENT_ID`, `FITBIT_CLIENT_SECRET`, `FITBIT_REDIRECT_URI=http://localhost:3000/api/fitbit/callback`
-3. Visit `http://localhost:3000/api/fitbit/auth` to authorize
+3. Leave `FITBIT_DATA_SOURCE` unset or set it to `legacy` until Google Health credentials are in place
+4. Visit `http://localhost:3000/api/fitbit/auth` to authorize
 
 The `/auth` and `/callback` routes are intentionally unprotected — OAuth redirects cannot carry a JWT.
 
