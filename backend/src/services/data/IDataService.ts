@@ -196,6 +196,8 @@ export interface IDataService {
   // ── Activity ───────────────────────────────────────────────────────────
   logActivity(userId: string, activity: Omit<ActivityEntry, 'id' | 'user_id'>): Promise<void>;
   getActivityLog(userId: string, limit?: number): Promise<ActivityEntry[]>;
+  /** Every activity_log row whose activity_type starts with `prefix` (paged past the API row cap). */
+  getActivitiesByTypePrefix(userId: string, prefix: string): Promise<ActivityEntry[]>;
 
   // ── Vault ──────────────────────────────────────────────────────────────
   getVaultItems(userId: string): Promise<VaultItem[]>;

@@ -93,6 +93,21 @@ export class XpCalculatorService {
     'wilderness-craft':     { baseXP: 20, durationMultiplier: 0.4 },
     'survival-skill':       { baseXP: 12, durationMultiplier: 0.25 },
 
+    // ── Recovery & Consistency quests (Warrior) ────────────────────────────
+    // Flat XP — no duration multiplier. Guards (one-time steps, Thursday-only,
+    // needs a logged session, 10-of-13 window) live in recoveryQuests.service.ts.
+    // Sizing: the X-ray main quest totals 300 XP, the same tier as the
+    // 280–300 XP expert crafting recipes; Rest Day Kept = 20 (a strength
+    // session's base); Session As Planned = 10 (a flat PR-distance-sized bonus);
+    // Consistency Bonus = 50 (same as the Dragon Slayer / CTF First Blood bonuses).
+    'recovery-xray-order':          { baseXP: 40 },   // Foot X-ray (Case 2) 1/4: doctor's order
+    'recovery-xray-book':           { baseXP: 40 },   // 2/4: X-ray booked
+    'recovery-xray-done':           { baseXP: 120 },  // 3/4: X-ray taken
+    'recovery-xray-review':         { baseXP: 100 },  // 4/4: results reviewed with doctor/PT
+    'recovery-rest-day':            { baseXP: 20 },   // Rest Day Kept (Thursday, no training)
+    'recovery-session-as-planned':  { baseXP: 10 },   // Session As Planned (bonus per scheduled session done)
+    'recovery-consistency-bonus':   { baseXP: 50 },   // 10 of ~13 planned sessions in 14 days
+
     // Admin activities (Sage/Developer class — low rate to prevent XP farming)
     // Quest planning, calendar events, sprint planning, task management
     'admin-planning': { baseXP: 5, durationMultiplier: 0.08 },
@@ -146,6 +161,7 @@ export class XpCalculatorService {
     if (activityType.startsWith('iq2') || activityType === 'personal-project') return 'developer';
     if (activityType === 'paladin-app-dev') return 'developer';
     if (activityType.startsWith('workout')) return 'warrior';
+    if (activityType.startsWith('recovery-')) return 'warrior';
     if (activityType === 'prayer-routine') return 'prayer';
     if (activityType.startsWith('art') || activityType.startsWith('christian-art')) return 'artist';
     if (activityType.startsWith('financial')) return 'financial';

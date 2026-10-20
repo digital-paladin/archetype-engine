@@ -179,14 +179,42 @@ export class SupabaseDataService implements IDataService {
   }
 
   async getActivityLog(userId: string, limit = 50): Promise<ActivityEntry[]> {
-    const { data, error } = await this.db
-      .from('activity_log')
-      .select('*')
-      .eq('user_id', userId)
-      .order('logged_at', { ascending: false })
-      .limit(limit);
-    if (error) throw error;
-    return data ?? [];
+    // PostgREST caps a single response (Supabase default max-rows is 1000).
+    // A larger limit has to be paged or the tail is silently dropped.
+    if (limit <= 1000) {
+      const { data, error } = await this.db
+        .from('activity_log')
+        .select('*')
+        .eq('user_id', userId)
+        .order('logged_at', { ascending: false })
+        .limit(limit);
+      if (error) throw error;
+      return data ?? [];
+    }
+    return this.pageActivities(userId, limit);
+  }
+
+  async getActivitiesByTypePrefix(userId: string, prefix: string): Promise<ActivityEntry[]> {
+    return this.pageActivities(userId, 50_000, prefix);
+  }
+
+  /** Page activity_log so a host row cap cannot truncate the requested window. */
+  private async pageActivities(userId: string, limit: number, prefix?: string): Promise<ActivityEntry[]> {
+    const pageSize = 1000;
+    const rows: ActivityEntry[] = [];
+    for (let offset = 0; offset < limit; offset += pageSize) {
+      const end = Math.min(offset + pageSize, limit) - 1;
+      let query = this.db.from('activity_log').select('*').eq('user_id', userId);
+      if (prefix) query = query.like('activity_type', `${prefix}%`);
+      const { data, error } = await query
+        .order('logged_at', { ascending: false })
+        .range(offset, end);
+      if (error) throw error;
+      const batch = data ?? [];
+      rows.push(...batch);
+      if (batch.length < end - offset + 1) break;
+    }
+    return rows;
   }
 
   // ── Vault ────────────────────────────────────────────────────────────────

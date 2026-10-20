@@ -49,11 +49,30 @@ interface ActivityType {
               <option value="art-music">Music Practice</option>
               <option value="art-writing">Creative Writing</option>
             </optgroup>
+            <optgroup label="Recovery &amp; Consistency (Warrior)">
+              <option value="recovery-session-as-planned">Session As Planned (+10, after logging the session)</option>
+              <option value="recovery-rest-day">Rest Day Kept — Thursday, no training (+20)</option>
+              <option value="recovery-consistency-bonus">Consistency Bonus — 10 of 13 in 14 days (+50)</option>
+              <option value="recovery-xray-order">Foot X-ray (Case 2) 1/4 — Doctor's order (+40)</option>
+              <option value="recovery-xray-book">Foot X-ray (Case 2) 2/4 — Booked (+40)</option>
+              <option value="recovery-xray-done">Foot X-ray (Case 2) 3/4 — X-ray done (+120)</option>
+              <option value="recovery-xray-review">Foot X-ray (Case 2) 4/4 — Results reviewed (+100)</option>
+            </optgroup>
             <optgroup label="Financial">
               <option value="financial-study">Financial Study</option>
               <option value="financial-project">Financial Project</option>
             </optgroup>
           </select>
+        </div>
+
+        <div class="form-group" *ngIf="recoveryQuest()">
+          <label for="claimDate">Claim date (blank = today)</label>
+          <input
+            type="date"
+            id="claimDate"
+            [(ngModel)]="claimDate"
+            name="claimDate"
+          >
         </div>
 
         <div class="form-group">
@@ -83,7 +102,7 @@ interface ActivityType {
         <div class="xp-preview" *ngIf="xpPreview() > 0">
           <span class="xp-label">XP Preview:</span>
           <span class="xp-value">+{{ displayXp() }} XP</span>
-          <span class="xp-rested" *ngIf="_xpMultiplier() > 1">✨ Rested Bonus ({{ _xpMultiplier() }}x)</span>
+          <span class="xp-rested" *ngIf="_xpMultiplier() > 1 && !recoveryQuest()">✨ Rested Bonus ({{ _xpMultiplier() }}x)</span>
         </div>
 
         <div class="form-actions">
@@ -239,6 +258,12 @@ interface ActivityType {
       border: 1px solid rgba(160,28,28,0.40);
       color: #ff8080;
     }
+
+    /* Phone: 16px fields avoid focus-zoom; 44px targets match the rest of the mobile UI. */
+    @media (max-width: 600px) {
+      select, input, textarea { font-size: 16px; }
+      button { min-height: 44px; }
+    }
   `]
 })
 export class QuickLogComponent {
@@ -251,10 +276,17 @@ export class QuickLogComponent {
   activityType = '';
   duration: number | null = null;
   notes = '';
+  /** Optional YYYY-MM-DD for a late Recovery & Consistency claim. Blank means today. */
+  claimDate = '';
 
   xpPreview = signal(0);
+  /** Recovery quests are flat server XP — the rested/combo multiplier must not change the preview. */
+  recoveryQuest = signal(false);
   /** XP preview adjusted by the active rested multiplier — shown in UI and sent to backend. */
-  displayXp  = computed(() => Math.round(this.xpPreview() * this._xpMultiplier()));
+  displayXp  = computed(() => {
+    const base = this.xpPreview();
+    return this.recoveryQuest() ? base : Math.round(base * this._xpMultiplier());
+  });
 
   isLogging    = signal(false);
   statusMessage = signal('');
@@ -263,6 +295,9 @@ export class QuickLogComponent {
   constructor(private http: HttpClient) {}
 
   onActivityTypeChange() {
+    const recovery = this.activityType.startsWith('recovery-');
+    this.recoveryQuest.set(recovery);
+    if (!recovery) this.claimDate = '';
     this.updateXpPreview();
   }
 
@@ -299,9 +334,12 @@ export class QuickLogComponent {
       duration: this.duration || undefined,
       notes: this.notes || undefined
     };
-    // When a rested multiplier is active, send the pre-multiplied XP so the backend
-    // uses this value directly (it accepts clientXp when provided).
-    if (this.displayXp() > 0) {
+    if (this.recoveryQuest()) {
+      // The server owns these XP values and rejects a bad claim date with 409.
+      if (this.claimDate) payload['clientDate'] = this.claimDate;
+    } else if (this.displayXp() > 0) {
+      // When a rested multiplier is active, send the pre-multiplied XP so the backend
+      // uses this value directly (it accepts clientXp when provided).
       payload['xp'] = this.displayXp();
     }
 
@@ -328,7 +366,10 @@ export class QuickLogComponent {
       },
       error: (err) => {
         this.isLogging.set(false);
-        this.statusMessage.set('Failed to log activity. Please try again.');
+        // 409 = a Recovery & Consistency quest guard said no (e.g. "Rest Day Kept only counts on Thursday")
+        this.statusMessage.set(err?.status === 409 && err?.error?.error
+          ? err.error.error
+          : 'Failed to log activity. Please try again.');
         this.statusClass.set('status-error');
         console.error('Failed to log activity:', err);
       }
@@ -339,6 +380,8 @@ export class QuickLogComponent {
     this.activityType = '';
     this.duration = null;
     this.notes = '';
+    this.claimDate = '';
+    this.recoveryQuest.set(false);
     this.xpPreview.set(0);
     this.statusMessage.set('');
   }
