@@ -195,7 +195,11 @@ export interface IDataService {
 
   // ── Activity ───────────────────────────────────────────────────────────
   logActivity(userId: string, activity: Omit<ActivityEntry, 'id' | 'user_id'>): Promise<void>;
-  getActivityLog(userId: string, limit?: number): Promise<ActivityEntry[]>;
+  /**
+   * Newest first. `onDate` (YYYY-MM-DD) limits the query to that UTC day,
+   * matching the consolidation window on `logged_at`. Limits above 1000 are paged.
+   */
+  getActivityLog(userId: string, limit?: number, onDate?: string): Promise<ActivityEntry[]>;
   /** Every activity_log row whose activity_type starts with `prefix` (paged past the API row cap). */
   getActivitiesByTypePrefix(userId: string, prefix: string): Promise<ActivityEntry[]>;
 
