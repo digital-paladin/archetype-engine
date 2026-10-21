@@ -1,8 +1,10 @@
 import { Server as SocketIOServer } from 'socket.io';
 import {
   ClassXp,
+  planQuestCorrection,
   presentQuest,
   PublicQuest,
+  QuestEdit,
   QuestStatus,
   SystemMessageRecord,
   SystemQuestError,
@@ -23,7 +25,7 @@ export function setSystemSocketIO(socket: SocketIOServer | null): void {
 }
 
 export interface SystemNotice {
-  type: 'issued' | 'cleared' | 'failed' | 'expired' | 'revealed' | 'message' | 'progress';
+  type: 'issued' | 'cleared' | 'failed' | 'expired' | 'revealed' | 'message' | 'progress' | 'edited';
   title: string;
   detail: string;
   questId?: string;
@@ -78,6 +80,7 @@ function blankRecord(
     recoveryType: quest.recoveryType,
     parentQuestId,
     resolution: null,
+    edits: [],
     createdAt: iso,
     updatedAt: iso,
     resolvedAt: null,
@@ -421,6 +424,147 @@ export async function updateQuestProgress(
     at: quest.updatedAt,
   });
   return presentQuest(saved);
+}
+
+export interface CorrectQuestResult {
+  quest: PublicQuest;
+  idempotentReplay: boolean;
+  changes: string[];
+}
+
+const MAX_STORED_EDITS = 50;
+
+function correctionIdempotencyKey(value: unknown): string {
+  const idempotencyKey = typeof value === 'string' ? value.trim() : '';
+  if (!idempotencyKey || idempotencyKey.length > 200 || /[\r\n]/.test(idempotencyKey)) {
+    throw new SystemQuestError('invalid_quest', 'idempotencyKey is required (1–200 characters)', 400);
+  }
+  return idempotencyKey;
+}
+
+function correctionMessageBody(quest: SystemQuestRecord, edit: QuestEdit): string {
+  const sealed = quest.hiddenUntilRevealed && !quest.revealedAt;
+  if (sealed) return 'The System corrected a hidden quest.';
+  const lines = [
+    `The System corrected "${quest.title}".`,
+    edit.reason ? `Reason: ${edit.reason}` : null,
+    ...edit.changes.map(change => `• ${change}`),
+  ].filter((line): line is string => !!line);
+  return lines.join('\n').slice(0, 4000);
+}
+
+async function ensureCorrectionMessage(userId: string, quest: SystemQuestRecord, edit: QuestEdit): Promise<void> {
+  const key = `quest-edit:${quest.id}:${edit.idempotencyKey}`;
+  const store = getSystemQuestStore();
+  const existing = await store.findMessageByIdempotency(userId, key);
+  if (existing) return;
+  const message: SystemMessageRecord = {
+    id: newQuestId(),
+    userId,
+    idempotencyKey: key,
+    body: correctionMessageBody(quest, edit),
+    questId: quest.id,
+    source: edit.source,
+    createdAt: edit.at,
+  };
+  try {
+    await store.insertMessage(message);
+  } catch (err) {
+    if (isUnique(err)) return;
+    throw err;
+  }
+}
+
+/**
+ * Correct an active quest: objective text and targets, add or remove
+ * objectives that have no progress, deadline, and penalty wording.
+ * Cleared, failed, and expired quests are rejected. A repeated
+ * idempotencyKey returns the quest as it is now and does not apply again.
+ */
+export async function correctSystemQuest(
+  userId: string,
+  id: string,
+  body: Record<string, unknown>,
+  authKind: 'user' | 'service',
+): Promise<CorrectQuestResult> {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    throw new SystemQuestError('invalid_quest', 'body must be an object', 400);
+  }
+  const idempotencyKey = correctionIdempotencyKey(body.idempotencyKey);
+  const store = getSystemQuestStore();
+  const existing = await store.findById(userId, id);
+  if (!existing) throw new SystemQuestError('not_found', 'Quest not found', 404);
+
+  const prior = (existing.edits ?? []).find(edit => edit.idempotencyKey === idempotencyKey);
+  if (prior) {
+    await ensureCorrectionMessage(userId, existing, prior);
+    return {
+      quest: presentQuest(existing, { includeHidden: true }),
+      idempotentReplay: true,
+      changes: prior.changes,
+    };
+  }
+
+  if (existing.status !== 'active') {
+    throw new SystemQuestError('not_active', 'Only active quests can be corrected', 409);
+  }
+
+  const now = new Date();
+  const plan = planQuestCorrection(existing, body, now);
+  const at = now.toISOString();
+  const edit: QuestEdit = {
+    idempotencyKey,
+    reason: plan.reason,
+    changes: plan.changes,
+    at,
+    source: authKind === 'service' ? 'grokbot' : 'user',
+  };
+  const next: SystemQuestRecord = {
+    ...existing,
+    title: plan.title,
+    description: plan.description,
+    deadline: plan.deadline,
+    objectives: plan.objectives,
+    xpReward: plan.xpReward,
+    penalty: plan.penalty,
+    edits: [...(existing.edits ?? []), edit].slice(-MAX_STORED_EDITS),
+    updatedAt: at,
+  };
+
+  const cas = await store.compareAndSetStatus(userId, id, 'active', next);
+  if (!cas) throw new SystemQuestError('not_found', 'Quest not found', 404);
+  if (!cas.changed) {
+    const raced = (cas.quest.edits ?? []).find(item => item.idempotencyKey === idempotencyKey);
+    if (raced) {
+      await ensureCorrectionMessage(userId, cas.quest, raced);
+      return {
+        quest: presentQuest(cas.quest, { includeHidden: true }),
+        idempotentReplay: true,
+        changes: raced.changes,
+      };
+    }
+    throw new SystemQuestError('not_active', 'Only active quests can be corrected', 409);
+  }
+
+  await ensureCorrectionMessage(userId, cas.quest, edit);
+
+  const sealed = cas.quest.hiddenUntilRevealed && !cas.quest.revealedAt;
+  const detail = sealed
+    ? 'The System adjusted a sealed quest.'
+    : (plan.reason ? `${plan.reason} — ${plan.changes.join('; ')}` : plan.changes.join('; ')).slice(0, 500);
+  notify(userId, {
+    type: 'edited',
+    title: sealed ? 'A hidden quest was corrected' : cas.quest.title,
+    detail,
+    questId: cas.quest.id,
+    at,
+  });
+
+  return {
+    quest: presentQuest(cas.quest, { includeHidden: true }),
+    idempotentReplay: false,
+    changes: plan.changes,
+  };
 }
 
 export async function revealSystemQuest(userId: string, id: string): Promise<PublicQuest> {

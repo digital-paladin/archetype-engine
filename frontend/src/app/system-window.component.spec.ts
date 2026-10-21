@@ -31,6 +31,9 @@ const QUESTS = [
     recoveryType: null,
     resolution: null,
     resolvedAt: null,
+    editedAt: '2026-10-20T18:00:00.000Z',
+    editCount: 1,
+    lastEditReason: 'Tuesday schedule changed: parkour 7:30-8:30 PM',
   },
   {
     id: 'q2',
@@ -128,6 +131,10 @@ describe('System window', () => {
     const text = fixture.nativeElement.textContent as string;
     expect(text).toContain('Mobility walk');
     expect(text).toContain('Walk 20 minutes');
+    expect(text).toContain('EDITED');
+    expect(text).toContain('Tuesday schedule changed: parkour 7:30-8:30 PM');
+    expect(fixture.nativeElement.querySelector('[data-testid="system-quest-edited"]').getAttribute('title'))
+      .toContain('parkour');
     expect(text).toContain('+40 Warrior');
     expect(text).toContain('earlier lights out');
     expect(text).toContain('???');
@@ -160,6 +167,26 @@ describe('System window', () => {
     expect(notice.textContent).toContain('QUEST ISSUED');
     expect(notice.textContent).toContain('Emergency: lights out');
     httpMock.expectOne(r => r.url.includes('/api/system/quests')).flush({ success: true, quests: QUESTS });
+  });
+
+  it('shows corrected objectives after an edited notice', () => {
+    notices.next({ type: 'edited', title: 'Mobility walk', detail: 'Parkour technique only' });
+    noticeFixture.detectChanges();
+    expect(noticeFixture.nativeElement.textContent).toContain('QUEST EDITED');
+    const refreshed = httpMock.expectOne(r => r.url.includes('/api/system/quests') && r.method === 'GET');
+    refreshed.flush({
+      success: true,
+      quests: [{
+        ...QUESTS[0],
+        objectives: [
+          ...QUESTS[0].objectives,
+          { id: 'parkour', label: 'Parkour technique only', target: 1, progress: 0, done: false },
+        ],
+      }],
+    });
+    fixture.detectChanges();
+    expect(fixture.nativeElement.textContent).toContain('Parkour technique only');
+    expect(fixture.nativeElement.querySelector('[data-testid="system-quest-edited"]').textContent).toContain('EDITED');
   });
 
   it('shows a generated service token once', () => {

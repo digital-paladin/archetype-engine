@@ -34,6 +34,9 @@ export interface SystemQuest {
   recoveryType: string | null;
   resolution: { outcome: string; xpPlanned?: { className: string; xp: number }[] } | null;
   resolvedAt: string | null;
+  editedAt?: string | null;
+  editCount?: number;
+  lastEditReason?: string | null;
 }
 
 export interface ServiceCredentialView {

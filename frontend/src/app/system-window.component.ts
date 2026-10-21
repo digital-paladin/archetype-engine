@@ -29,7 +29,10 @@ import { SystemQuest, SystemQuestService, formatCountdown } from './system-quest
 
       <article class="sys-card" data-testid="system-quest" *ngFor="let quest of activeQuests" [attr.data-kind]="quest.hidden ? 'hidden' : quest.kind">
         <div class="sys-card-top">
-          <span class="sys-kind">{{ quest.hidden ? 'HIDDEN' : (quest.kind | uppercase) }}</span>
+          <div class="sys-card-tags">
+            <span class="sys-kind">{{ quest.hidden ? 'HIDDEN' : (quest.kind | uppercase) }}</span>
+            <span class="sys-edited" *ngIf="quest.editedAt" data-testid="system-quest-edited" [attr.title]="quest.lastEditReason || 'The System corrected this quest'">EDITED</span>
+          </div>
           <span class="sys-clock" data-testid="system-countdown">{{ countdown(quest) }}</span>
         </div>
 
@@ -39,6 +42,7 @@ import { SystemQuest, SystemQuestService, formatCountdown } from './system-quest
         </ng-container>
         <ng-template #openQuest>
           <h3>{{ quest.title }}</h3>
+          <p class="sys-edited-reason" *ngIf="quest.lastEditReason" data-testid="system-edit-reason">{{ quest.lastEditReason }}</p>
           <p class="sys-desc" *ngIf="quest.description">{{ quest.description }}</p>
           <p class="sys-flag" *ngIf="quest.thursdayTrainingFlag">Thursday rest day — this quest is flagged as training.</p>
 
@@ -116,12 +120,21 @@ import { SystemQuest, SystemQuestService, formatCountdown } from './system-quest
       box-shadow: 0 0 0 1px rgba(8, 16, 40, 0.8), 0 0 32px rgba(70, 130, 255, 0.18), inset 0 0 40px rgba(40, 80, 160, 0.12);
       font-family: 'Cinzel', serif;
     }
-    .sys-head, .sys-card-top, .sys-cred-row, .sys-rewards, .sys-result {
+    .sys-head, .sys-card-top, .sys-cred-row, .sys-rewards, .sys-result, .sys-card-tags {
       display: flex;
       justify-content: space-between;
       gap: 12px;
       align-items: center;
     }
+    .sys-card-tags { justify-content: flex-start; gap: 8px; }
+    .sys-edited {
+      letter-spacing: 0.16em;
+      font-size: 10px;
+      color: #1a1408;
+      background: #ffd27a;
+      padding: 2px 6px;
+    }
+    .sys-edited-reason { color: #ffd27a; font-size: 13px; font-family: 'Open Sans', sans-serif; }
     .sys-kicker, .sys-kind, .sys-label {
       letter-spacing: 0.18em;
       color: #8eb7ff;
