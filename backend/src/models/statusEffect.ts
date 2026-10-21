@@ -19,6 +19,12 @@ export interface StatusEffect {
   duration: number;          // minutes (-1 = indefinite)
   expiresAt: string | null;  // ISO timestamp or null for indefinite
   notes?: string;
+  /** Stable merge key for auto effects. Manual effects leave this empty. */
+  effectKey?: string | null;
+  /** Human-readable dose, e.g. "0.84 standard drinks". */
+  dose?: string;
+  autoApplied?: boolean;
+  meta?: Record<string, unknown>;
 }
 
 // ─── Pre-defined templates for common effects ─────────────────────────────
@@ -62,6 +68,7 @@ export const STATUS_EFFECT_TEMPLATES: Omit<StatusEffect, 'id' | 'appliedAt' | 'e
     ],
   },
   {
+    // Manual preset. Logging alcohol builds a dose-scaled "Alcohol Shadow" instead.
     name: 'Alcohol Effect',
     type: 'mixed',
     category: 'substance',
