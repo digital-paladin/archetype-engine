@@ -154,6 +154,29 @@ describe('fitbit routes provider switch', () => {
     expect(mockAwardWearable).not.toHaveBeenCalled();
   });
 
+  it('POST sync rejects a calendar date that does not exist', async () => {
+    const res = await request(app()).post('/api/fitbit/activities/sync').send({ date: '2026-02-31' });
+    expect(res.status).toBe(400);
+    expect(mockFitbit.getActivities).not.toHaveBeenCalled();
+    expect(mockAwardWearable).not.toHaveBeenCalled();
+  });
+
+  it('POST sync defaults an omitted date to America/Chicago today', async () => {
+    mockFitbit.isConfigured.mockReturnValue(true);
+    mockFitbit.getActivities.mockResolvedValue({
+      steps: 0, activeMinutes: 0, caloriesOut: 0, activities: [],
+    });
+    const chicagoToday = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(new Date());
+
+    const res = await request(app()).post('/api/fitbit/activities/sync').send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.date).toBe(chicagoToday);
+    expect(mockAwardWearable).toHaveBeenCalledWith('user-1', chicagoToday, 'fitbit', []);
+  });
+
   it('falls back to the legacy Fitbit API when Google Health is not configured', async () => {
     mockFitbit.isConfigured.mockReturnValue(true);
     mockFitbit.getActivities.mockResolvedValue({

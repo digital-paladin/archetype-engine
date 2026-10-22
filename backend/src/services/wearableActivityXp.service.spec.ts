@@ -58,6 +58,13 @@ describe('zoneOffset', () => {
     expect(zoneOffset('2026-10-13', '18:03')).toBe('-05:00');
     expect(zoneOffset('2026-11-10', '18:03')).toBe('-06:00');
   });
+
+  it('uses the offset after a DST transition, not the UTC-clock guess', () => {
+    // 2026-03-08 02:00 CST springs forward to 03:00 CDT. 03:30 is CDT.
+    expect(zoneOffset('2026-03-08', '03:30')).toBe('-05:00');
+    // 2026-11-01 02:00 CDT falls back to 01:00 CST. 02:00 is CST.
+    expect(zoneOffset('2026-11-01', '02:00')).toBe('-06:00');
+  });
 });
 
 describe('awardWearableActivities', () => {
@@ -80,7 +87,7 @@ describe('awardWearableActivities', () => {
 
     expect(r.totalXp).toBe(21 + 16 + 17);
     expect(r.awarded.map(a => a.xp)).toEqual([21, 16, 17]);
-    expect(mockGetActivityLog).toHaveBeenCalledWith('u1', 200, '2026-10-13');
+    expect(mockGetActivityLog).toHaveBeenCalledWith('u1', 1000, '2026-10-13');
     expect(mockLogActivity).toHaveBeenCalledTimes(3);
     const first = mockLogActivity.mock.calls[0][1];
     expect(first).toMatchObject({ activity_type: 'workout-cardio', class_name: 'Warrior', xp_awarded: 21 });
@@ -138,6 +145,55 @@ describe('awardWearableActivities', () => {
       { name: 'Walk', durationMin: 0, calories: 0, startTime: '09:00' },
     ], NOW);
     expect(z.skipped[0].reason).toBe('no_duration');
+    expect(mockLogActivity).not.toHaveBeenCalled();
+  });
+
+  it('awards two sessions that share a start minute when their provider ids differ', async () => {
+    const sessions = [
+      { name: 'Walk', durationMin: 20, calories: 100, startTime: '18:03', sourceId: '111' },
+      { name: 'Sport', durationMin: 45, calories: 400, startTime: '18:03', sourceId: '222' },
+    ];
+    const r = await awardWearableActivities('u1', '2026-10-13', 'fitbit', sessions, NOW);
+    expect(r.awarded.map(a => a.name)).toEqual(['Walk', 'Sport']);
+    expect(mockLogActivity).toHaveBeenCalledTimes(2);
+    expect(r.totalXp).toBe(18 + 21);
+  });
+
+  it('normalizes HH:MM:SS onto the same slot as HH:MM', async () => {
+    const r = await awardWearableActivities('u1', '2026-10-13', 'fitbit', [
+      { name: 'Sport', durationMin: 45, calories: 459, startTime: '18:03:00', sourceId: '111' },
+    ], NOW);
+    expect(r.awarded).toHaveLength(1);
+    const row = mockLogActivity.mock.calls[0][1];
+    expect(row.logged_at).toBe('2026-10-13T23:03:00.000Z');
+    expect(row.notes).toContain('[wearable:2026-10-13T18:03]');
+    expect(row.notes).toContain('[wearable-id:fitbit:111]');
+  });
+
+  it('strips brackets from a provider id so the tag still round-trips', async () => {
+    const r = await awardWearableActivities('u1', '2026-10-13', 'google', [
+      { name: 'Run', durationMin: 30, calories: 200, startTime: '08:00', sourceId: 'points/abc]def' },
+    ], NOW);
+    expect(r.awarded).toHaveLength(1);
+    const notes = mockLogActivity.mock.calls[0][1].notes as string;
+    expect(notes).toContain('[wearable-id:google:points/abcdef]');
+    mockGetActivityLog.mockResolvedValue([{ activity_type: 'workout-cardio', class_name: 'Warrior', notes }]);
+    const again = await awardWearableActivities('u1', '2026-10-13', 'google', [
+      { name: 'Run', durationMin: 30, calories: 200, startTime: '08:05', sourceId: 'points/abc]def' },
+    ], NOW);
+    expect(again.awarded).toHaveLength(0);
+    expect(again.skipped[0].reason).toBe('already_awarded');
+  });
+
+  it('skips a future day and an unparseable clock without writing', async () => {
+    const future = await awardWearableActivities('u1', '2026-10-23', 'fitbit', [
+      { name: 'Walk', durationMin: 20, calories: 80, startTime: '09:00' },
+    ], NOW);
+    expect(future.skipped[0].reason).toBe('future');
+    const bad = await awardWearableActivities('u1', '2026-10-13', 'fitbit', [
+      { name: 'Walk', durationMin: 20, calories: 80, startTime: 'not-a-time' },
+    ], NOW);
+    expect(bad.skipped[0].reason).toBe('invalid_time');
     expect(mockLogActivity).not.toHaveBeenCalled();
   });
 });

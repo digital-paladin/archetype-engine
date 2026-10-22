@@ -7,6 +7,8 @@ import { caughtErrorMessage } from '../utils/caughtError';
 import { syncSleepDebtFromJournalSafe } from '../services/sleepDebt.service';
 import { awardWearableActivities, WearableXpResult } from '../services/wearableActivityXp.service';
 import type { ActivitySummary } from '../services/fitbit.service';
+import { chicagoDay } from '../services/activityOccurredAt';
+import { isRealIsoDate } from '../services/recoveryQuests.service';
 import {
   fitbitDataSourceMode,
   legacyFitbitRetired,
@@ -293,18 +295,27 @@ router.get('/activities/today', authMiddleware, async (req: Request, res: Respon
   }
 });
 
+function syncDate(req: Request): string | null {
+  const raw = typeof req.body?.date === 'string' ? req.body.date
+    : typeof req.query.date === 'string' ? req.query.date : undefined;
+  if (raw === undefined) return chicagoDay(new Date());
+  const trimmed = raw.trim();
+  if (trimmed === '') return chicagoDay(new Date());
+  return isRealIsoDate(trimmed) ? trimmed : null;
+}
+
 // POST /api/fitbit/activities/sync — fetch the day's wearable workouts, fill an empty
 // Warrior Skills quest field, and award Warrior XP once per session (PROTECTED).
-// Body or query: { date: 'YYYY-MM-DD' } (defaults to server-local today).
+// Body or query: { date: 'YYYY-MM-DD' } (defaults to America/Chicago today).
+// Calling this for a past day is the back-pay path. The dashboard only does that
+// for today; older dates stay on the read-only GET until the owner asks.
 router.post('/activities/sync', authMiddleware, async (req: Request, res: Response) => {
   console.log('\n[FITBIT] ═══ /activities/sync ═══════════════════');
-  const rawDate = typeof req.body?.date === 'string' ? req.body.date
-    : typeof req.query.date === 'string' ? req.query.date : undefined;
-  if (rawDate !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) {
+  const dateStr = syncDate(req);
+  if (dateStr === null) {
     return res.status(400).json({ success: false, error: 'date must be YYYY-MM-DD' });
   }
   const userId = (req as any).userId as string;
-  const dateStr = rawDate ?? new Date().toLocaleDateString('en-CA');
   let provider: 'google' | 'fitbit';
   try {
     provider = await dailyProvider(userId);
