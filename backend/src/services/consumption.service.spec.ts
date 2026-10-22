@@ -62,7 +62,12 @@ describe('logConsumption', () => {
     expect(replay.idempotentReplay).toBe(true);
     expect(replay.effects.find(e => e.effectKey === 'alcohol')?.id)
       .toBe(first.effects.find(e => e.effectKey === 'alcohol')?.id);
-    expect((await getAllEffects(userId)).filter(e => e.effectKey === 'alcohol')).toHaveLength(1);
+    // Alcohol Shadow clears a few hours after the pour. getAllEffects defaults
+    // to wall-clock now, so an unscoped read goes empty once that window has
+    // passed (the row is still stored; it is no longer active). Ask at the pour.
+    const atPour = new Date('2026-10-20T19:00:00-05:00');
+    expect((await getAllEffects(userId, atPour)).filter(e => e.effectKey === 'alcohol')).toHaveLength(1);
+    expect((await getAllEffects(userId, new Date('2026-10-21T12:00:00-05:00'))).filter(e => e.effectKey === 'alcohol')).toHaveLength(0);
 
     const second = await logConsumption(userId, {
       idempotencyKey: 'beer-2',

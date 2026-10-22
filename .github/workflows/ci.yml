@@ -65,14 +65,11 @@ jobs:
     name: Playwright (e2e)
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Skip when secrets are unset (first-time setup) or on fork PRs (secrets unavailable).
-    # Job is skipped, not failed — Jest/Vitest still gate the PR.
-    if: >
-      secrets.PLAYWRIGHT_BASE_URL != '' &&
-      secrets.PLAYWRIGHT_API_URL != '' &&
-      secrets.PLAYWRIGHT_USERNAME != '' &&
-      secrets.PLAYWRIGHT_PASSWORD != '' &&
-      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    # Fork PRs cannot read repo secrets — skip the job rather than fail opaquely.
+    # Do NOT reference secrets in this if. The secrets context is illegal in a
+    # job-level if, and GitHub then rejects the whole workflow with zero jobs
+    # (backend and frontend included). Missing secrets are skipped in a step below.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     defaults:
       run:
         working-directory: frontend
@@ -87,18 +84,27 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verify Playwright secrets
+      # Job env already maps the four secrets. An empty one means "skip", not "fail",
+      # so Jest and Vitest remain the merge gate until Playwright is configured.
+      - name: Skip Playwright when secrets are unset
+        id: playwright
         run: |
           missing=0
           for var in PLAYWRIGHT_BASE_URL PLAYWRIGHT_API_URL PLAYWRIGHT_USERNAME PLAYWRIGHT_PASSWORD; do
             if [ -z "${!var}" ]; then
-              echo "::error::$var GitHub Actions secret is not set (Settings → Secrets → Actions)"
+              echo "$var is unset"
               missing=1
             fi
           done
-          exit "$missing"
+          if [ "$missing" -eq 1 ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Playwright secrets are unset — skipping e2e."
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Setup Node.js
+        if: steps.playwright.outputs.run == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -106,12 +112,15 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install dependencies
+        if: steps.playwright.outputs.run == 'true'
         run: npm ci
 
       - name: Install Playwright browsers
+        if: steps.playwright.outputs.run == 'true'
         run: npx playwright install --with-deps chromium
 
       - name: Run Playwright e2e
+        if: steps.playwright.outputs.run == 'true'
         run: npm run e2e:ci
 
       - name: Upload Playwright report
