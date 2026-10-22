@@ -32,6 +32,10 @@ jest.mock('../services/data/dataService', () => ({
     upsertQuestEntry: (...args: unknown[]) => mockUpsertQuest(...args),
   }),
 }));
+const mockAwardWearable = jest.fn();
+jest.mock('../services/wearableActivityXp.service', () => ({
+  awardWearableActivities: (...args: unknown[]) => mockAwardWearable(...args),
+}));
 jest.mock('../services/sleepDebt.service', () => ({
   syncSleepDebtFromJournalSafe: jest.fn().mockResolvedValue(undefined),
 }));
@@ -62,6 +66,7 @@ describe('fitbit routes provider switch', () => {
     mockUpsertJournal.mockResolvedValue(undefined);
     mockGetQuests.mockResolvedValue([]);
     mockUpsertQuest.mockResolvedValue(undefined);
+    mockAwardWearable.mockResolvedValue({ date: '2026-10-18', awarded: [], skipped: [], totalXp: 0 });
     mockGoogle.isConfigured.mockReturnValue(false);
     mockGoogle.hasTokens.mockResolvedValue(false);
     mockFitbit.isConfigured.mockReturnValue(false);
@@ -73,10 +78,9 @@ describe('fitbit routes provider switch', () => {
     else process.env.FITBIT_DATA_SOURCE = original;
   });
 
-  it('uses Google Health activities and still writes the Warrior quest', async () => {
+  it('GET activities is read-only: no quest write and no XP', async () => {
     mockGoogle.isConfigured.mockReturnValue(true);
     mockGoogle.hasTokens.mockResolvedValue(true);
-    mockFitbit.isConfigured.mockReturnValue(true);
     mockGoogle.getActivities.mockResolvedValue({
       steps: 4000,
       activeMinutes: 30,
@@ -88,7 +92,32 @@ describe('fitbit routes provider switch', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.source).toBe('google-health');
-    expect(res.body.steps).toBe(4000);
+    expect(res.body.activities).toHaveLength(1);
+    expect(mockGetQuests).not.toHaveBeenCalled();
+    expect(mockUpsertQuest).not.toHaveBeenCalled();
+    expect(mockAwardWearable).not.toHaveBeenCalled();
+  });
+
+  it('POST sync uses Google Health, writes the Warrior quest and awards XP', async () => {
+    mockGoogle.isConfigured.mockReturnValue(true);
+    mockGoogle.hasTokens.mockResolvedValue(true);
+    mockFitbit.isConfigured.mockReturnValue(true);
+    const activities = [{ name: 'Walk', durationMin: 30, calories: 150, startTime: '08:00' }];
+    mockGoogle.getActivities.mockResolvedValue({ steps: 4000, activeMinutes: 30, caloriesOut: 2200, activities });
+    mockAwardWearable.mockResolvedValue({
+      date: '2026-10-18',
+      awarded: [{ name: 'Walk', activityType: 'workout-cardio', durationMin: 30, xp: 19, tag: '[wearable:2026-10-18T08:00]' }],
+      skipped: [],
+      totalXp: 19,
+    });
+
+    const res = await request(app()).post('/api/fitbit/activities/sync').send({ date: '2026-10-18' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.source).toBe('google-health');
+    expect(res.body.questWritten).toBe(true);
+    expect(res.body.xp.totalXp).toBe(19);
+    expect(mockGoogle.getActivities).toHaveBeenCalledWith('2026-10-18', 'user-1');
     expect(mockFitbit.getActivities).not.toHaveBeenCalled();
     expect(mockUpsertQuest).toHaveBeenCalledWith(
       'user-1',
@@ -97,6 +126,32 @@ describe('fitbit routes provider switch', () => {
       'Warrior Skills',
       expect.stringContaining('Walk 30min'),
     );
+    expect(mockAwardWearable).toHaveBeenCalledWith('user-1', '2026-10-18', 'google', activities);
+  });
+
+  it('POST sync keeps an existing Warrior Skills entry but still awards XP', async () => {
+    mockFitbit.isConfigured.mockReturnValue(true);
+    mockFitbit.getActivities.mockResolvedValue({
+      steps: 10, activeMinutes: 0, caloriesOut: 1800,
+      activities: [{ name: 'Sport', durationMin: 45, calories: 459, startTime: '18:03' }],
+    });
+    mockGetQuests.mockResolvedValue([
+      { class_name: 'Paladin of God', quest_label: 'Warrior Skills', content: 'Sambo class' },
+    ]);
+
+    const res = await request(app()).post('/api/fitbit/activities/sync?date=2026-10-13');
+
+    expect(res.status).toBe(200);
+    expect(res.body.questWritten).toBe(false);
+    expect(mockUpsertQuest).not.toHaveBeenCalled();
+    expect(mockAwardWearable).toHaveBeenCalledWith('user-1', '2026-10-13', 'fitbit', expect.any(Array));
+  });
+
+  it('POST sync rejects a malformed date before any fetch', async () => {
+    const res = await request(app()).post('/api/fitbit/activities/sync').send({ date: '10/13/2026' });
+    expect(res.status).toBe(400);
+    expect(mockFitbit.getActivities).not.toHaveBeenCalled();
+    expect(mockAwardWearable).not.toHaveBeenCalled();
   });
 
   it('falls back to the legacy Fitbit API when Google Health is not configured', async () => {

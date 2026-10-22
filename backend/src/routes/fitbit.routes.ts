@@ -5,6 +5,8 @@ import { GoogleHealthService } from '../services/googleHealth.service';
 import { authMiddleware } from '../middleware/auth.middleware';
 import { caughtErrorMessage } from '../utils/caughtError';
 import { syncSleepDebtFromJournalSafe } from '../services/sleepDebt.service';
+import { awardWearableActivities, WearableXpResult } from '../services/wearableActivityXp.service';
+import type { ActivitySummary } from '../services/fitbit.service';
 import {
   fitbitDataSourceMode,
   legacyFitbitRetired,
@@ -259,7 +261,14 @@ router.get('/sleep/week', authMiddleware, async (req: Request, res: Response) =>
   res.json({ success: true, days, source: provider === 'google' ? 'google-health' : 'fitbit' });
 });
 
+async function fetchActivities(provider: 'google' | 'fitbit', date: string | undefined, userId: string): Promise<ActivitySummary> {
+  return provider === 'google'
+    ? googleHealth.getActivities(date ?? 'today', userId)
+    : fitbitService.getActivities(date ?? 'today', userId);
+}
+
 // GET /api/fitbit/activities/today — auto-detected physical activities + step summary (PROTECTED)
+// Read-only: no quest or XP writes. Use POST /activities/sync to record them.
 router.get('/activities/today', authMiddleware, async (req: Request, res: Response) => {
   console.log('\n[FITBIT] ═══ /activities/today ══════════════════');
   const clientDate = typeof req.query.date === 'string' ? req.query.date : undefined;
@@ -272,32 +281,8 @@ router.get('/activities/today', authMiddleware, async (req: Request, res: Respon
     throw err;
   }
   try {
-    const data = provider === 'google'
-      ? await googleHealth.getActivities(clientDate ?? 'today', userId)
-      : await fitbitService.getActivities(clientDate ?? 'today', userId);
+    const data = await fetchActivities(provider, clientDate, userId);
     console.log(`[FITBIT] ✅ Activities fetched: ${data.activities.length} logged, ${data.steps} steps`);
-
-    // Write logged workouts to Warrior quest entries (non-fatal, only if field is empty)
-    if (data.activities.length > 0) {
-      try {
-        const userId   = (req as any).userId as string;
-        const dateStr  = clientDate ?? new Date().toLocaleDateString('en-CA');
-        const db       = getDataService();
-        const rows     = await db.getQuestEntries(userId, dateStr);
-        const existing = rows.find(r => r.class_name === 'Paladin of God' && r.quest_label === 'Warrior Skills');
-        const hasContent = existing?.content && existing.content.trim() !== '[To be logged]';
-        if (!hasContent) {
-          const workoutLines = data.activities
-            .map(a => `${a.name} ${a.durationMin}min (${a.calories} cal${a.startTime ? ` @ ${a.startTime}` : ''})`)
-            .join('\n');
-          await db.upsertQuestEntry(userId, dateStr, 'Paladin of God', 'Warrior Skills', workoutLines);
-          console.log(`[FITBIT] ✅ Wrote ${data.activities.length} workout(s) to Warrior Skills quest for ${dateStr}`);
-        }
-      } catch (questErr) {
-        console.warn(`[FITBIT] Warrior quest write failed (non-fatal): ${questErr instanceof Error ? questErr.message : questErr}`);
-      }
-    }
-
     console.log('[FITBIT] ═══════════════════════════════════════\n');
     res.json({ success: true, source: provider === 'google' ? 'google-health' : 'fitbit', ...data });
   } catch (err) {
@@ -306,6 +291,74 @@ router.get('/activities/today', authMiddleware, async (req: Request, res: Respon
     console.log('[FITBIT] ═══════════════════════════════════════\n');
     return sendFetchError(res, err);
   }
+});
+
+// POST /api/fitbit/activities/sync — fetch the day's wearable workouts, fill an empty
+// Warrior Skills quest field, and award Warrior XP once per session (PROTECTED).
+// Body or query: { date: 'YYYY-MM-DD' } (defaults to server-local today).
+router.post('/activities/sync', authMiddleware, async (req: Request, res: Response) => {
+  console.log('\n[FITBIT] ═══ /activities/sync ═══════════════════');
+  const rawDate = typeof req.body?.date === 'string' ? req.body.date
+    : typeof req.query.date === 'string' ? req.query.date : undefined;
+  if (rawDate !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) {
+    return res.status(400).json({ success: false, error: 'date must be YYYY-MM-DD' });
+  }
+  const userId = (req as any).userId as string;
+  const dateStr = rawDate ?? new Date().toLocaleDateString('en-CA');
+  let provider: 'google' | 'fitbit';
+  try {
+    provider = await dailyProvider(userId);
+  } catch (err) {
+    if (err instanceof WearableSourceError) return sendSourceError(res, err);
+    throw err;
+  }
+  let data: ActivitySummary;
+  try {
+    data = await fetchActivities(provider, dateStr, userId);
+  } catch (err) {
+    const msg = caughtErrorMessage(err);
+    console.error(`[FITBIT] ❌ Activities fetch failed: ${msg}`);
+    return sendFetchError(res, err);
+  }
+
+  let questWritten = false;
+  if (data.activities.length > 0) {
+    try {
+      const db       = getDataService();
+      const rows     = await db.getQuestEntries(userId, dateStr);
+      const existing = rows.find(r => r.class_name === 'Paladin of God' && r.quest_label === 'Warrior Skills');
+      const hasContent = existing?.content && existing.content.trim() !== '[To be logged]';
+      if (!hasContent) {
+        const workoutLines = data.activities
+          .map(a => `${a.name} ${a.durationMin}min (${a.calories} cal${a.startTime ? ` @ ${a.startTime}` : ''})`)
+          .join('\n');
+        await db.upsertQuestEntry(userId, dateStr, 'Paladin of God', 'Warrior Skills', workoutLines);
+        questWritten = true;
+        console.log(`[FITBIT] ✅ Wrote ${data.activities.length} workout(s) to Warrior Skills quest for ${dateStr}`);
+      }
+    } catch (questErr) {
+      console.warn(`[FITBIT] Warrior quest write failed (non-fatal): ${questErr instanceof Error ? questErr.message : questErr}`);
+    }
+  }
+
+  let xp: WearableXpResult;
+  try {
+    xp = await awardWearableActivities(userId, dateStr, provider, data.activities);
+  } catch (xpErr) {
+    const msg = caughtErrorMessage(xpErr);
+    console.error(`[FITBIT] ❌ Wearable XP award failed: ${msg}`);
+    return res.status(500).json({ success: false, error: `XP award failed: ${msg}`, questWritten });
+  }
+
+  console.log('[FITBIT] ═══════════════════════════════════════\n');
+  res.json({
+    success: true,
+    source: provider === 'google' ? 'google-health' : 'fitbit',
+    date: dateStr,
+    ...data,
+    questWritten,
+    xp,
+  });
 });
 
 // GET /api/fitbit/nutrition/today — food log entries + daily macro totals (PROTECTED)

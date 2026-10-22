@@ -482,6 +482,7 @@ function parseExercises(points: DataPoint[]): FitbitActivity[] {
       startTime: civilClock(exercise.interval?.civilStartTime)
         || clockFromIso(exercise.interval?.startTime)
         || '',
+      sourceId: point.name || undefined,
     });
   }
   return activities;

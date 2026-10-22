@@ -26,6 +26,8 @@ export interface FitbitActivity {
   steps?: number;
   distanceKm?: number;
   startTime: string;      // "HH:MM"
+  /** Provider's own id for this session (Fitbit logId, Google Health data point name). */
+  sourceId?: string;
 }
 
 export interface HeartZone {
@@ -279,6 +281,7 @@ export class FitbitService {
       steps:      (a.steps    > 0) ? a.steps                             : undefined,
       distanceKm: (a.distance > 0) ? Math.round(a.distance * 10) / 10   : undefined,
       startTime:  a.startTime || '',
+      sourceId:   a.logId != null ? String(a.logId) : undefined,
     }));
     const result: ActivitySummary = {
       steps:                summary.steps || 0,

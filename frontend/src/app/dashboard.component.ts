@@ -674,8 +674,10 @@ export class DashboardComponent implements OnInit, OnDestroy {
     });
 
     // Activities — today
-    this.http.get<{ success: boolean } & ActivitySummary>(
-      `${environment.apiUrl}/api/fitbit/activities/today?date=${localDate}`
+    // POST sync: records the day's wearable workouts (Warrior Skills quest + Warrior XP,
+    // once per session). GET /activities/today is read-only.
+    this.http.post<{ success: boolean } & ActivitySummary>(
+      `${environment.apiUrl}/api/fitbit/activities/sync`, { date: localDate }
     ).subscribe({
       next: (res) => {
         if (res.success) {
@@ -807,8 +809,8 @@ export class DashboardComponent implements OnInit, OnDestroy {
       error: () => { /* Non-fatal */ }
     });
 
-    this.http.get<{ success: boolean } & ActivitySummary>(
-      `${environment.apiUrl}/api/fitbit/activities/today?date=${date}`
+    this.http.post<{ success: boolean } & ActivitySummary>(
+      `${environment.apiUrl}/api/fitbit/activities/sync`, { date }
     ).subscribe({
       next: (res) => {
         if (res.success) {
