@@ -7,6 +7,7 @@ import {
   applyDailyIncrement,
   appendResistance,
   appendScheduledBreak,
+  buildAbstinenceSeedRows,
   detectCompoundBreak,
   normalizeStreakRow,
   parseJsonArray,
@@ -32,6 +33,21 @@ function row(partial: Partial<AbstinenceStreakRow> & { item_index: number }): Ab
 
 describe('abstinence.service pure helpers', () => {
   const today = '2026-07-17';
+
+  it('seed rows omit scheduled_breaks so signup works before migration 009', () => {
+    const rows = buildAbstinenceSeedRows('user-1', { currentStreak: 12, longestStreak: 21 });
+    expect(rows.map((r) => r.item_index)).toEqual([0, 10]);
+    expect(rows[0]).toEqual({
+      user_id: 'user-1',
+      item_index: 0,
+      current_streak: 12,
+      longest_streak: 21,
+      break_log: [],
+      resistance_events: [],
+    });
+    expect(rows[1].current_streak).toBe(12);
+    expect(rows.every((r) => !Object.prototype.hasOwnProperty.call(r, 'scheduled_breaks'))).toBe(true);
+  });
 
   it('parseJsonArray handles array and JSON string', () => {
     expect(parseJsonArray([{ a: 1 }])).toEqual([{ a: 1 }]);

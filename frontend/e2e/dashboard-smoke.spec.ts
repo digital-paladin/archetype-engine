@@ -26,6 +26,7 @@ const NAV_TABS = [
   { id: 'acm',         label: 'ACM'               },
   { id: 'nutrition',   label: 'Nutrition'         },
   { id: 'quests',      label: 'Quests'            },
+  { id: 'system',      label: 'System'            },
   { id: 'analytics',   label: 'Analytics'         },
   { id: 'buffs',       label: 'Buffs'             },
   { id: 'vault',       label: 'Vault'             },
@@ -33,16 +34,21 @@ const NAV_TABS = [
   { id: 'rewards',     label: 'Rewards'           },
   { id: 'treasury',    label: 'Treasury'          },
   { id: 'billing',     label: 'Billing'           },
+  { id: 'integrations', label: 'Integrations'     },
   { id: 'quest-lines', label: 'Quest Lines'       },
   { id: 'inventory',   label: 'Inventory'         },
   { id: 'crafting',    label: 'Crafting'          },
   { id: 'todoist',     label: 'Quests (Todoist)'  },
 ];
 
-function navTab(page: Page, label: string) {
+function exactLabel(label: string, flags?: string): RegExp {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^${escaped}$`, flags);
+}
+
+function navTab(page: Page, label: string) {
   return page.locator('.eso-tab-bar .eso-tab').filter({
-    has: page.locator('.eso-tab-label', { hasText: new RegExp(`^${escaped}$`) }),
+    has: page.locator('.eso-tab-label', { hasText: exactLabel(label) }),
   });
 }
 
@@ -57,8 +63,8 @@ test.describe('Dashboard smoke', () => {
   test('all nav tab buttons are present', async ({ page }) => {
     const tabs = page.locator('.eso-tab-bar .eso-tab');
     await expect(tabs.first()).toBeVisible();
-    const count = await tabs.count();
-    expect(count, `Expected ${NAV_TABS.length} nav tabs, found ${count}`).toBe(NAV_TABS.length);
+    const labels = (await page.locator('.eso-tab-bar .eso-tab-label').allTextContents()).map((t) => t.trim());
+    expect(labels).toEqual(NAV_TABS.map((tab) => tab.label));
   });
 
   // ── 2. Default active tab ─────────────────────────────────────────────────
@@ -78,7 +84,7 @@ test.describe('Dashboard smoke', () => {
 
       // Active class should move to this tab within 3 s (pure CSS + signal update — no API wait)
       const activeLabel = page.locator('.eso-tab.eso-tab-active .eso-tab-label');
-      await expect(activeLabel).toHaveText(new RegExp(`^${tab.label}$`, 'i'), { timeout: 3_000 });
+      await expect(activeLabel).toHaveText(exactLabel(tab.label, 'i'), { timeout: 3_000 });
 
       // No Angular crash overlay should be present
       // Angular renders <app-error-overlay> or throws to the console on fatal errors

@@ -331,22 +331,37 @@ export function resolveScheduledBreak(
   };
 }
 
-export async function seedAbstinenceStreaks(
+/**
+ * Rows for a new Hunter's abstinence counters.
+ *
+ * `scheduled_breaks` is omitted on purpose. Migration 009 adds that column with
+ * DEFAULT '[]'. Including it in the upsert makes PostgREST reject the whole
+ * write when the column is not in the schema cache yet, and signup then stays
+ * on /login (`abstinence_streaks seed failed`). Omitting it lets the default
+ * apply on insert and leaves any existing schedules in place on reseed.
+ */
+export function buildAbstinenceSeedRows(
   userId: string,
   opts?: { currentStreak?: number; longestStreak?: number },
-): Promise<void> {
-  const admin = getSupabaseAdmin();
+) {
   const current = opts?.currentStreak ?? 0;
   const longest = opts?.longestStreak ?? current;
-  const rows = ABSTINENCE_ITEM_INDICES.map((item_index) => ({
+  return ABSTINENCE_ITEM_INDICES.map((item_index) => ({
     user_id: userId,
     item_index,
     current_streak: current,
     longest_streak: longest,
     break_log: [],
     resistance_events: [],
-    scheduled_breaks: [],
   }));
+}
+
+export async function seedAbstinenceStreaks(
+  userId: string,
+  opts?: { currentStreak?: number; longestStreak?: number },
+): Promise<void> {
+  const admin = getSupabaseAdmin();
+  const rows = buildAbstinenceSeedRows(userId, opts);
 
   const { error } = await admin.from('abstinence_streaks').upsert(rows, {
     onConflict: 'user_id,item_index',
