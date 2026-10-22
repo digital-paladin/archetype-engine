@@ -221,6 +221,7 @@ See [`backend/.env.example`](./backend/.env.example) for the full reference with
 | `FITBIT_CLIENT_ID` | No | Enables automatic sleep/nutrition sync |
 | `FITBIT_CLIENT_SECRET` | No | From [dev.fitbit.com](https://dev.fitbit.com) |
 | `TODOIST_API_TOKEN` | No | Enables AI task creation via Todoist |
+| `TOGGL_API_TOKEN` | No | Types Fitbit "Sport" sessions from Toggl Track. The owner adds this on Railway; do not commit it. If unset, Sport stays workout-cardio. |
 
 ---
 
@@ -294,6 +295,12 @@ The full cutover — env vars, Restricted OAuth scopes, Cloud Console steps, and
 4. Visit `http://localhost:3000/api/fitbit/auth` to authorize
 
 The `/auth` and `/callback` routes are intentionally unprotected — OAuth redirects cannot carry a JWT.
+
+### Toggl Track (Sport session typing)
+
+Fitbit logs martial-arts classes as "Sport". `POST /api/fitbit/activities/sync` can type that session from the Toggl Track time entry with the greatest overlap (project name or tag): Sambo, BJJ, MMA, wrestling, and judo are `workout-mma`; lifting, strength, and resistance are `workout-strength`; PT, Hinge Health, mobility, and yoga are `workout-mobility`. The quest line and the activity notes look like `Sport (Toggl: Sambo)`. An explicit `overrides` entry on the sync request wins. If the token is unset, Toggl is unreachable, or nothing mapped overlaps, the session stays `workout-cardio` and the sync still succeeds.
+
+The owner must add `TOGGL_API_TOKEN` on Railway (Track → Profile → API token). The same variable can be set in local `backend/.env`. Do not commit the token. With it unset, wearable sync behaves as before.
 
 ---
 

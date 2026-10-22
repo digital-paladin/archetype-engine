@@ -33,6 +33,10 @@ jest.mock('../services/data/dataService', () => ({
   }),
 }));
 const mockAwardWearable = jest.fn();
+const mockLoadToggl = jest.fn();
+jest.mock('../services/togglWearableTyping.service', () => ({
+  loadTogglSportOverrides: (...args: unknown[]) => mockLoadToggl(...args),
+}));
 jest.mock('../services/wearableActivityXp.service', () => {
   const actual = jest.requireActual('../services/wearableActivityXp.service');
   return {
@@ -71,6 +75,7 @@ describe('fitbit routes provider switch', () => {
     mockGetQuests.mockResolvedValue([]);
     mockUpsertQuest.mockResolvedValue(undefined);
     mockAwardWearable.mockResolvedValue({ date: '2026-10-18', awarded: [], skipped: [], totalXp: 0 });
+    mockLoadToggl.mockResolvedValue([]);
     mockGoogle.isConfigured.mockReturnValue(false);
     mockGoogle.hasTokens.mockResolvedValue(false);
     mockFitbit.isConfigured.mockReturnValue(false);
@@ -176,6 +181,7 @@ describe('fitbit routes provider switch', () => {
     expect(res.status).toBe(400);
     expect(mockFitbit.getActivities).not.toHaveBeenCalled();
     expect(mockAwardWearable).not.toHaveBeenCalled();
+    expect(mockLoadToggl).not.toHaveBeenCalled();
   });
 
   it('POST sync rejects a calendar date that does not exist', async () => {
@@ -213,6 +219,7 @@ describe('fitbit routes provider switch', () => {
     expect(mockFitbit.getActivities).not.toHaveBeenCalled();
     expect(mockGoogle.getActivities).not.toHaveBeenCalled();
     expect(mockAwardWearable).not.toHaveBeenCalled();
+    expect(mockLoadToggl).not.toHaveBeenCalled();
   });
 
   it('POST sync applies an override label in the quest and passes the parsed overrides to the awarder', async () => {
@@ -247,6 +254,65 @@ describe('fitbit routes provider switch', () => {
           label: 'Toggl: Sambo',
         }],
       },
+    );
+    expect(mockLoadToggl).toHaveBeenCalledWith('2026-10-13', activities, [{
+      sourceId: '111',
+      startTime: undefined,
+      activityType: 'workout-mma',
+      label: 'Toggl: Sambo',
+    }]);
+  });
+
+  it('POST sync appends a Toggl Sport type without replacing an explicit override', async () => {
+    mockFitbit.isConfigured.mockReturnValue(true);
+    const activities = [
+      { name: 'Sport', durationMin: 45, calories: 459, startTime: '18:03', sourceId: '111' },
+      { name: 'Sport', durationMin: 30, calories: 200, startTime: '12:00', sourceId: '222' },
+    ];
+    mockFitbit.getActivities.mockResolvedValue({
+      steps: 1, activeMinutes: 1, caloriesOut: 1, activities,
+    });
+    mockLoadToggl.mockResolvedValue([
+      { sourceId: '222', startTime: '12:00', activityType: 'workout-mma', label: 'Toggl: Sambo' },
+    ]);
+
+    const res = await request(app()).post('/api/fitbit/activities/sync').send({
+      date: '2026-10-13',
+      overrides: [{ sourceId: '111', activityType: 'workout-strength', label: 'Toggl: Lift' }],
+    });
+
+    expect(res.status).toBe(200);
+    const quest = mockUpsertQuest.mock.calls[0][4] as string;
+    expect(quest).toContain('Sport (Toggl: Lift) 45min');
+    expect(quest).toContain('Sport (Toggl: Sambo) 30min');
+    expect(mockAwardWearable).toHaveBeenCalledWith('user-1', '2026-10-13', 'fitbit', activities, {
+      overrides: [
+        { sourceId: '111', startTime: undefined, activityType: 'workout-strength', label: 'Toggl: Lift' },
+        { sourceId: '222', startTime: '12:00', activityType: 'workout-mma', label: 'Toggl: Sambo' },
+      ],
+    });
+  });
+
+  it('POST sync still awards cardio when Toggl typing throws', async () => {
+    mockFitbit.isConfigured.mockReturnValue(true);
+    const activities = [
+      { name: 'Sport', durationMin: 45, calories: 459, startTime: '18:03', sourceId: '111' },
+    ];
+    mockFitbit.getActivities.mockResolvedValue({
+      steps: 1, activeMinutes: 1, caloriesOut: 1, activities,
+    });
+    mockLoadToggl.mockRejectedValue(new Error('socket hang up'));
+
+    const res = await request(app()).post('/api/fitbit/activities/sync').send({ date: '2026-10-13' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(mockAwardWearable).toHaveBeenCalledWith(
+      'user-1',
+      '2026-10-13',
+      'fitbit',
+      activities,
+      { overrides: [] },
     );
   });
 

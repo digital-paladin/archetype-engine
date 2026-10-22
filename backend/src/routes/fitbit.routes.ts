@@ -13,6 +13,8 @@ import {
   WearableTypeOverride,
   WearableXpResult,
 } from '../services/wearableActivityXp.service';
+import { loadTogglSportOverrides } from '../services/togglWearableTyping.service';
+import { redactTogglSecret } from '../services/togglTrack.service';
 import type { ActivitySummary } from '../services/fitbit.service';
 import { chicagoDay } from '../services/activityOccurredAt';
 import { isRealIsoDate } from '../services/recoveryQuests.service';
@@ -316,8 +318,11 @@ function syncDate(req: Request): string | null {
 // Body: { date?: 'YYYY-MM-DD', overrides?: WearableTypeOverride[] }.
 // `date` defaults to America/Chicago today (a past date is the back-pay path).
 // The dashboard only calls this for today; older dates stay on the read-only GET
-// until the owner asks. Overrides type a session (Fitbit "Sport" → Sambo, etc.)
-// without a Toggl client. They do not re-type a session that was already awarded.
+// until the owner asks. Explicit overrides type a session (Fitbit "Sport" → Sambo).
+// When a Sport session has no explicit override, Toggl Track may supply one from
+// the time entry with the greatest overlap. A missing token, an unreachable
+// Toggl, or an unmapped entry leaves that session on workout-cardio. Neither
+// path re-types a session that was already awarded.
 router.post('/activities/sync', authMiddleware, async (req: Request, res: Response) => {
   console.log('\n[FITBIT] ═══ /activities/sync ═══════════════════');
   const dateStr = syncDate(req);
@@ -350,6 +355,15 @@ router.post('/activities/sync', authMiddleware, async (req: Request, res: Respon
     return sendFetchError(res, err);
   }
 
+  // Explicit request overrides stay first so they win over a Toggl suggestion.
+  let effectiveOverrides = overrides;
+  try {
+    const fromToggl = await loadTogglSportOverrides(dateStr, data.activities, overrides);
+    effectiveOverrides = [...overrides, ...fromToggl];
+  } catch (err) {
+    console.warn(`[TOGGL] Sport typing skipped; sessions stay workout-cardio: ${redactTogglSecret(caughtErrorMessage(err))}`);
+  }
+
   let questWritten = false;
   if (data.activities.length > 0) {
     try {
@@ -361,7 +375,7 @@ router.post('/activities/sync', authMiddleware, async (req: Request, res: Respon
         // Every fetched session, including auto-detected walks that earn no XP.
         // An override label is shown here ("Sport (Toggl: Sambo)") and in the log notes.
         const workoutLines = data.activities
-          .map(a => wearableQuestLine(a, overrides))
+          .map(a => wearableQuestLine(a, effectiveOverrides))
           .join('\n');
         await db.upsertQuestEntry(userId, dateStr, 'Paladin of God', 'Warrior Skills', workoutLines);
         questWritten = true;
@@ -374,7 +388,7 @@ router.post('/activities/sync', authMiddleware, async (req: Request, res: Respon
 
   let xp: WearableXpResult;
   try {
-    xp = await awardWearableActivities(userId, dateStr, provider, data.activities, { overrides });
+    xp = await awardWearableActivities(userId, dateStr, provider, data.activities, { overrides: effectiveOverrides });
   } catch (xpErr) {
     const msg = caughtErrorMessage(xpErr);
     console.error(`[FITBIT] ❌ Wearable XP award failed: ${msg}`);
