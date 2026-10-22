@@ -20,6 +20,14 @@ export interface JournalEntry {
   sleep_start?: string;      // HH:MM
   sleep_end?: string;        // HH:MM
   fitbit_score?: number;
+  /** Heart-rate variability in milliseconds. Optional; not an XP input. */
+  hrv_ms?: number;
+  /** Resting heart rate in whole bpm. Optional; not an XP input. */
+  resting_hr?: number;
+  /** Blood oxygen percentage, 0–100. Optional; not an XP input. */
+  spo2_pct?: number;
+  /** Provenance for the optional vitals columns. */
+  vitals_source?: 'hume' | 'fitbit' | 'oura' | 'manual';
   fasting_hours?: number;
   hydration_oz?: number;
   protein_level?: 'low' | 'medium' | 'high';

@@ -13,6 +13,7 @@
 
 import request from 'supertest';
 import express, { Express } from 'express';
+import { syncSleepDebtFromJournalSafe } from '../services/sleepDebt.service';
 
 // ── Mock getDataService BEFORE importing the route ───────────────────────────
 const mockGetJournalEntry    = jest.fn<Promise<any>, any[]>();
@@ -151,6 +152,35 @@ describe('GET /api/daily-metrics', () => {
     expect(res.body.metrics.stress.mentalState).toBe('Focused and productive');
   });
 
+  it('returns null vitals when the journal row has none', async () => {
+    mockGetJournalEntry.mockResolvedValue(FULL_ENTRY);
+
+    const res = await request(makeApp()).get('/api/daily-metrics?date=2026-04-12');
+
+    expect(res.body.metrics.hrvMs).toBeNull();
+    expect(res.body.metrics.restingHr).toBeNull();
+    expect(res.body.metrics.spo2Pct).toBeNull();
+    expect(res.body.metrics.source).toBeNull();
+  });
+
+  it('returns stored vitals, coercing numeric columns to numbers', async () => {
+    mockGetJournalEntry.mockResolvedValue({
+      ...FULL_ENTRY,
+      hrv_ms: '47.5',
+      resting_hr: 54,
+      spo2_pct: '97',
+      vitals_source: 'hume',
+    });
+
+    const res = await request(makeApp()).get('/api/daily-metrics?date=2026-04-12');
+
+    expect(res.body.metrics.hrvMs).toBe(47.5);
+    expect(res.body.metrics.restingHr).toBe(54);
+    expect(res.body.metrics.spo2Pct).toBe(97);
+    expect(res.body.metrics.source).toBe('hume');
+    expect(res.body.metrics.sleep.fitbitScore).toBe(82);
+  });
+
   it('uses today\'s date when no date query param provided', async () => {
     mockGetJournalEntry.mockResolvedValue(null);
 
@@ -226,6 +256,122 @@ describe('POST /api/daily-metrics', () => {
 
     expect(res.status).toBe(500);
     expect(res.body.success).toBe(false);
+  });
+
+  it('stores a sleep update without touching vitals columns', async () => {
+    const res = await request(makeApp())
+      .post('/api/daily-metrics')
+      .send({ date: '2026-04-12', metrics: { sleep: { bedtime: '23:00', wakeTime: '07:00', totalSleep: 8, fitbitScore: 90 } } });
+
+    expect(res.status).toBe(200);
+    expect(mockUpsertJournalEntry.mock.calls[0][1]).toEqual({
+      entry_date: '2026-04-12',
+      sleep_start: '23:00',
+      sleep_end: '07:00',
+      sleep_hours: 8,
+      fitbit_score: 90,
+    });
+  });
+
+  it('stores optional vitals and does not award XP or sync sleep debt', async () => {
+    const syncSleep = syncSleepDebtFromJournalSafe as jest.Mock;
+    syncSleep.mockClear();
+
+    const res = await request(makeApp())
+      .post('/api/daily-metrics')
+      .send({
+        date: '2026-04-12',
+        metrics: { hrvMs: 47.5, restingHr: 54, spo2Pct: 97, source: 'Hume' },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true });
+    expect(mockUpsertJournalEntry.mock.calls[0][1]).toEqual({
+      entry_date: '2026-04-12',
+      hrv_ms: 47.5,
+      resting_hr: 54,
+      spo2_pct: 97,
+      vitals_source: 'hume',
+    });
+    expect(syncSleep).not.toHaveBeenCalled();
+  });
+
+  it('stores a partial vitals update alongside an unchanged sleep patch', async () => {
+    const res = await request(makeApp())
+      .post('/api/daily-metrics')
+      .send({
+        date: '2026-04-12',
+        metrics: {
+          sleep: { bedtime: '23:00', wakeTime: '07:00', totalSleep: 8, fitbitScore: 90 },
+          spo2Pct: 98.4,
+          source: ' manual ',
+        },
+      });
+
+    expect(res.status).toBe(200);
+    expect(mockUpsertJournalEntry.mock.calls[0][1]).toEqual({
+      entry_date: '2026-04-12',
+      sleep_start: '23:00',
+      sleep_end: '07:00',
+      sleep_hours: 8,
+      fitbit_score: 90,
+      spo2_pct: 98.4,
+      vitals_source: 'manual',
+    });
+  });
+
+  it.each([
+    [{ hrvMs: 0 }, 'hrvMs'],
+    [{ hrvMs: 500.1 }, 'hrvMs'],
+    [{ hrvMs: '47' }, 'hrvMs'],
+    [{ restingHr: 19 }, 'restingHr'],
+    [{ restingHr: 221 }, 'restingHr'],
+    [{ restingHr: 54.5 }, 'restingHr'],
+    [{ restingHr: '54' }, 'restingHr'],
+    [{ spo2Pct: -0.1 }, 'spo2Pct'],
+    [{ spo2Pct: 100.1 }, 'spo2Pct'],
+    [{ spo2Pct: '97' }, 'spo2Pct'],
+    [{ source: 'whoop' }, 'source'],
+    [{ source: '' }, 'source'],
+  ])('returns 400 and does not write for %j', async (vitals, field) => {
+    const res = await request(makeApp())
+      .post('/api/daily-metrics')
+      .send({ date: '2026-04-12', metrics: { sleep: { totalSleep: 8 }, ...vitals } });
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toContain(field);
+    expect(mockUpsertJournalEntry).not.toHaveBeenCalled();
+  });
+
+  it('accepts vitals on the inclusive range bounds', async () => {
+    const low = await request(makeApp())
+      .post('/api/daily-metrics')
+      .send({
+        date: '2026-04-12',
+        metrics: { hrvMs: 1, restingHr: 20, spo2Pct: 0, source: 'oura' },
+      });
+    expect(low.status).toBe(200);
+    expect(mockUpsertJournalEntry.mock.calls[0][1]).toMatchObject({
+      hrv_ms: 1,
+      resting_hr: 20,
+      spo2_pct: 0,
+      vitals_source: 'oura',
+    });
+
+    const high = await request(makeApp())
+      .post('/api/daily-metrics')
+      .send({
+        date: '2026-04-12',
+        metrics: { hrvMs: 500, restingHr: 220, spo2Pct: 100, source: 'fitbit' },
+      });
+    expect(high.status).toBe(200);
+    expect(mockUpsertJournalEntry.mock.calls[1][1]).toMatchObject({
+      hrv_ms: 500,
+      resting_hr: 220,
+      spo2_pct: 100,
+      vitals_source: 'fitbit',
+    });
   });
 });
 

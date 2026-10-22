@@ -17,6 +17,69 @@ import { allowsGoogleHealthReads, allowsLegacyFitbitReads } from '../services/fi
 const router = Router();
 const db = getDataService();
 
+/** Consumer-band HRV in milliseconds. Outside this is treated as a bad reading. */
+const HRV_MS_MIN = 1;
+const HRV_MS_MAX = 500;
+/** Whole bpm. Wide enough for bradycardia and a strained "resting" sample. */
+const RESTING_HR_MIN = 20;
+const RESTING_HR_MAX = 220;
+const SPO2_PCT_MIN = 0;
+const SPO2_PCT_MAX = 100;
+const VITALS_SOURCES = new Set(['hume', 'fitbit', 'oura', 'manual']);
+
+type VitalsColumnPatch = Partial<Pick<JournalEntry, 'hrv_ms' | 'resting_hr' | 'spo2_pct' | 'vitals_source'>>;
+
+/**
+ * Optional vitals on the metrics object. Absent fields are left unchanged.
+ * Present-but-invalid fields reject the whole request (no partial write).
+ */
+function readOptionalVitals(metrics: Record<string, unknown>): { error: string } | { patch: VitalsColumnPatch } {
+  const patch: VitalsColumnPatch = {};
+
+  if (metrics.hrvMs != null) {
+    const n = metrics.hrvMs;
+    if (typeof n !== 'number' || !Number.isFinite(n) || n < HRV_MS_MIN || n > HRV_MS_MAX) {
+      return { error: `hrvMs must be a number of milliseconds between ${HRV_MS_MIN} and ${HRV_MS_MAX}` };
+    }
+    patch.hrv_ms = n;
+  }
+
+  if (metrics.restingHr != null) {
+    const n = metrics.restingHr;
+    if (typeof n !== 'number' || !Number.isInteger(n) || n < RESTING_HR_MIN || n > RESTING_HR_MAX) {
+      return { error: `restingHr must be an integer heart rate in bpm between ${RESTING_HR_MIN} and ${RESTING_HR_MAX}` };
+    }
+    patch.resting_hr = n;
+  }
+
+  if (metrics.spo2Pct != null) {
+    const n = metrics.spo2Pct;
+    if (typeof n !== 'number' || !Number.isFinite(n) || n < SPO2_PCT_MIN || n > SPO2_PCT_MAX) {
+      return { error: `spo2Pct must be a number between ${SPO2_PCT_MIN} and ${SPO2_PCT_MAX}` };
+    }
+    patch.spo2_pct = n;
+  }
+
+  if (metrics.source != null) {
+    if (typeof metrics.source !== 'string') {
+      return { error: 'source must be one of hume, fitbit, oura, manual' };
+    }
+    const source = metrics.source.trim().toLowerCase();
+    if (!VITALS_SOURCES.has(source)) {
+      return { error: 'source must be one of hume, fitbit, oura, manual' };
+    }
+    patch.vitals_source = source as JournalEntry['vitals_source'];
+  }
+
+  return { patch };
+}
+
+function finiteOrNull(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
 function todayDateStr(): string {
   return localDateStr();
 }
@@ -83,11 +146,18 @@ function capitalize(s: string): string {
 }
 
 function entryToMetrics(entry: JournalEntry | null) {
+  const vitals = {
+    hrvMs:     finiteOrNull(entry?.hrv_ms),
+    restingHr: finiteOrNull(entry?.resting_hr),
+    spo2Pct:   finiteOrNull(entry?.spo2_pct),
+    source:    entry?.vitals_source ?? null,
+  };
   if (!entry) {
     return {
       sleep:     { bedtime: null, wakeTime: null, totalSleep: null, fitbitScore: null, vitalityScore: null, quality: null },
       nutrition: { meals: null, protein: null, calories: null, hydration: null, foodNotes: '' },
       stress:    { stress: null, energy: null, mentalState: null },
+      ...vitals,
     };
   }
   const vitalityScore = entry.fitbit_score != null ? entry.fitbit_score / 10 : null;
@@ -113,6 +183,7 @@ function entryToMetrics(entry: JournalEntry | null) {
       energy:      entry.energy_score ?? null,
       mentalState: entry.mental_state ?? null,
     },
+    ...vitals,
   };
 }
 
@@ -167,7 +238,8 @@ router.get('/sleep-history', async (req: Request, res: Response) => {
 });
 
 // ── POST /api/daily-metrics ───────────────────────────────────────────────────
-// Body: { date, metrics: { sleep?, nutrition?, stress? } }
+// Body: { date, metrics: { sleep?, nutrition?, stress?, hrvMs?, restingHr?, spo2Pct?, source? } }
+// Vitals are optional and do not award XP. source tags the vitals reading only.
 router.post('/', async (req: Request, res: Response) => {
   const { date, metrics } = req.body;
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
@@ -175,6 +247,11 @@ router.post('/', async (req: Request, res: Response) => {
   }
   if (!metrics || typeof metrics !== 'object') {
     return res.status(400).json({ success: false, error: 'metrics object required' });
+  }
+
+  const vitals = readOptionalVitals(metrics as Record<string, unknown>);
+  if ('error' in vitals) {
+    return res.status(400).json({ success: false, error: vitals.error });
   }
 
   try {
@@ -200,6 +277,8 @@ router.post('/', async (req: Request, res: Response) => {
       if (energy      != null) patch.energy_score = energy;
       if (mentalState != null) patch.mental_state = mentalState;
     }
+
+    Object.assign(patch, vitals.patch);
 
     await db.upsertJournalEntry(userId, patch);
     if (patch.sleep_hours != null) {

@@ -197,3 +197,84 @@ describe('DashboardComponent Quick Log', () => {
     expect(fixture.nativeElement.querySelector('#quick-log-panel app-quick-log')).toBeTruthy();
   });
 });
+
+describe('DashboardComponent stored vitals', () => {
+  let fixture: ComponentFixture<DashboardComponent>;
+  let httpMock: HttpTestingController;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [DashboardComponent],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        provideRouter([]),
+        {
+          provide: SocketService,
+          useValue: {
+            onXpProjectionUpdate: () => EMPTY,
+            onSystemNotice: () => EMPTY,
+          },
+        },
+        {
+          provide: XpProjectionService,
+          useValue: {
+            getVitalityStatus: () => of({ current: null, status: '', sleepDebt: null, trend: '', flag: '' }),
+            getProjections: () => of(null),
+            getRecentGains: () => of([]),
+            getQuestLog: () => of({ quests: [] }),
+          },
+        },
+      ],
+    })
+      .overrideComponent(DashboardComponent, {
+        set: { imports: [CommonModule, QuickLogComponent, ...PANEL_STUBS] },
+      })
+      .compileComponents();
+
+    httpMock = TestBed.inject(HttpTestingController);
+    fixture = TestBed.createComponent(DashboardComponent);
+    fixture.detectChanges();
+    httpMock.match(() => true).forEach(req => {
+      if (req.request.url.includes('/api/quests/')) {
+        req.flush([]);
+      } else if (req.request.url.includes('/api/daily-metrics')) {
+        req.flush({
+          success: true,
+          metrics: {
+            stress: { stress: null, energy: null, mentalState: '' },
+            hrvMs: 47.5,
+            restingHr: 54,
+            spo2Pct: 97,
+            source: 'hume',
+          },
+        });
+      } else {
+        req.flush({ success: false });
+      }
+    });
+    fixture.detectChanges();
+  });
+
+  afterEach(() => {
+    fixture.destroy();
+    httpMock.verify();
+  });
+
+  it('shows journal vitals as read-only text and leaves the Fitbit resting HR row alone', () => {
+    const root: HTMLElement = fixture.nativeElement;
+    const hrv = root.querySelector('[data-testid="stored-hrv"]');
+    const hr = root.querySelector('[data-testid="stored-resting-hr"]');
+    const spo2 = root.querySelector('[data-testid="stored-spo2"]');
+    const source = root.querySelector('[data-testid="stored-vitals-source"]');
+
+    expect(hrv?.textContent).toContain('47.5 ms');
+    expect(hr?.textContent).toContain('54 bpm');
+    expect(spo2?.textContent).toContain('97%');
+    expect(source?.textContent).toContain('hume');
+    expect(hrv?.querySelector('input, button')).toBeNull();
+    expect(hr?.querySelector('input, button')).toBeNull();
+    expect(spo2?.querySelector('input, button')).toBeNull();
+    expect(root.textContent).not.toContain('❤ Resting HR');
+  });
+});
