@@ -33,9 +33,13 @@ jest.mock('../services/data/dataService', () => ({
   }),
 }));
 const mockAwardWearable = jest.fn();
-jest.mock('../services/wearableActivityXp.service', () => ({
-  awardWearableActivities: (...args: unknown[]) => mockAwardWearable(...args),
-}));
+jest.mock('../services/wearableActivityXp.service', () => {
+  const actual = jest.requireActual('../services/wearableActivityXp.service');
+  return {
+    ...actual,
+    awardWearableActivities: (...args: unknown[]) => mockAwardWearable(...args),
+  };
+});
 jest.mock('../services/sleepDebt.service', () => ({
   syncSleepDebtFromJournalSafe: jest.fn().mockResolvedValue(undefined),
 }));
@@ -126,7 +130,7 @@ describe('fitbit routes provider switch', () => {
       'Warrior Skills',
       expect.stringContaining('Walk 30min'),
     );
-    expect(mockAwardWearable).toHaveBeenCalledWith('user-1', '2026-10-18', 'google', activities);
+    expect(mockAwardWearable).toHaveBeenCalledWith('user-1', '2026-10-18', 'google', activities, { overrides: [] });
   });
 
   it('POST sync writes an auto-detected walk into the quest and still passes it to the awarder', async () => {
@@ -146,7 +150,7 @@ describe('fitbit routes provider switch', () => {
     const quest = mockUpsertQuest.mock.calls[0][4] as string;
     expect(quest).toContain('Walk 12min');
     expect(quest).toContain('Sport 45min');
-    expect(mockAwardWearable).toHaveBeenCalledWith('user-1', '2026-10-13', 'fitbit', activities);
+    expect(mockAwardWearable).toHaveBeenCalledWith('user-1', '2026-10-13', 'fitbit', activities, { overrides: [] });
   });
 
   it('POST sync keeps an existing Warrior Skills entry but still awards XP', async () => {
@@ -164,7 +168,7 @@ describe('fitbit routes provider switch', () => {
     expect(res.status).toBe(200);
     expect(res.body.questWritten).toBe(false);
     expect(mockUpsertQuest).not.toHaveBeenCalled();
-    expect(mockAwardWearable).toHaveBeenCalledWith('user-1', '2026-10-13', 'fitbit', expect.any(Array));
+    expect(mockAwardWearable).toHaveBeenCalledWith('user-1', '2026-10-13', 'fitbit', expect.any(Array), { overrides: [] });
   });
 
   it('POST sync rejects a malformed date before any fetch', async () => {
@@ -194,7 +198,56 @@ describe('fitbit routes provider switch', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.date).toBe(chicagoToday);
-    expect(mockAwardWearable).toHaveBeenCalledWith('user-1', chicagoToday, 'fitbit', []);
+    expect(mockAwardWearable).toHaveBeenCalledWith('user-1', chicagoToday, 'fitbit', [], { overrides: [] });
+  });
+
+  it('POST sync rejects an override activity type outside the engine workout rates before any fetch', async () => {
+    mockFitbit.isConfigured.mockReturnValue(true);
+    const res = await request(app()).post('/api/fitbit/activities/sync').send({
+      date: '2026-10-13',
+      overrides: [{ sourceId: '111', activityType: 'workout-sambo' }],
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toMatch(/workout-cardio/);
+    expect(mockFitbit.getActivities).not.toHaveBeenCalled();
+    expect(mockGoogle.getActivities).not.toHaveBeenCalled();
+    expect(mockAwardWearable).not.toHaveBeenCalled();
+  });
+
+  it('POST sync applies an override label in the quest and passes the parsed overrides to the awarder', async () => {
+    mockFitbit.isConfigured.mockReturnValue(true);
+    const activities = [
+      { name: 'Sport', durationMin: 45, calories: 459, startTime: '18:03', sourceId: '111', logType: 'tracker' },
+      { name: 'Walk', durationMin: 12, calories: 40, startTime: '07:10', logType: 'auto_detected' },
+    ];
+    mockFitbit.getActivities.mockResolvedValue({
+      steps: 4000, activeMinutes: 50, caloriesOut: 2000, activities,
+    });
+
+    const res = await request(app()).post('/api/fitbit/activities/sync').send({
+      date: '2026-10-13',
+      overrides: [{ sourceId: '111', activityType: 'workout-mma', label: 'Toggl: Sambo' }],
+    });
+
+    expect(res.status).toBe(200);
+    const quest = mockUpsertQuest.mock.calls[0][4] as string;
+    expect(quest).toContain('Sport (Toggl: Sambo) 45min');
+    expect(quest).toContain('Walk 12min');
+    expect(mockAwardWearable).toHaveBeenCalledWith(
+      'user-1',
+      '2026-10-13',
+      'fitbit',
+      activities,
+      {
+        overrides: [{
+          sourceId: '111',
+          startTime: undefined,
+          activityType: 'workout-mma',
+          label: 'Toggl: Sambo',
+        }],
+      },
+    );
   });
 
   it('falls back to the legacy Fitbit API when Google Health is not configured', async () => {

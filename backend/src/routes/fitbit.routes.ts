@@ -5,7 +5,14 @@ import { GoogleHealthService } from '../services/googleHealth.service';
 import { authMiddleware } from '../middleware/auth.middleware';
 import { caughtErrorMessage } from '../utils/caughtError';
 import { syncSleepDebtFromJournalSafe } from '../services/sleepDebt.service';
-import { awardWearableActivities, WearableXpResult } from '../services/wearableActivityXp.service';
+import {
+  awardWearableActivities,
+  parseWearableOverrides,
+  wearableQuestLine,
+  WearableOverrideError,
+  WearableTypeOverride,
+  WearableXpResult,
+} from '../services/wearableActivityXp.service';
 import type { ActivitySummary } from '../services/fitbit.service';
 import { chicagoDay } from '../services/activityOccurredAt';
 import { isRealIsoDate } from '../services/recoveryQuests.service';
@@ -306,14 +313,25 @@ function syncDate(req: Request): string | null {
 
 // POST /api/fitbit/activities/sync — fetch the day's wearable workouts, fill an empty
 // Warrior Skills quest field, and award Warrior XP once per session (PROTECTED).
-// Body or query: { date: 'YYYY-MM-DD' } (defaults to America/Chicago today).
-// Calling this for a past day is the back-pay path. The dashboard only does that
-// for today; older dates stay on the read-only GET until the owner asks.
+// Body: { date?: 'YYYY-MM-DD', overrides?: WearableTypeOverride[] }.
+// `date` defaults to America/Chicago today (a past date is the back-pay path).
+// The dashboard only calls this for today; older dates stay on the read-only GET
+// until the owner asks. Overrides type a session (Fitbit "Sport" → Sambo, etc.)
+// without a Toggl client. They do not re-type a session that was already awarded.
 router.post('/activities/sync', authMiddleware, async (req: Request, res: Response) => {
   console.log('\n[FITBIT] ═══ /activities/sync ═══════════════════');
   const dateStr = syncDate(req);
   if (dateStr === null) {
     return res.status(400).json({ success: false, error: 'date must be YYYY-MM-DD' });
+  }
+  let overrides: WearableTypeOverride[];
+  try {
+    overrides = parseWearableOverrides(req.body?.overrides);
+  } catch (err) {
+    if (err instanceof WearableOverrideError) {
+      return res.status(400).json({ success: false, error: err.message });
+    }
+    throw err;
   }
   const userId = (req as any).userId as string;
   let provider: 'google' | 'fitbit';
@@ -341,8 +359,9 @@ router.post('/activities/sync', authMiddleware, async (req: Request, res: Respon
       const hasContent = existing?.content && existing.content.trim() !== '[To be logged]';
       if (!hasContent) {
         // Every fetched session, including auto-detected walks that earn no XP.
+        // An override label is shown here ("Sport (Toggl: Sambo)") and in the log notes.
         const workoutLines = data.activities
-          .map(a => `${a.name} ${a.durationMin}min (${a.calories} cal${a.startTime ? ` @ ${a.startTime}` : ''})`)
+          .map(a => wearableQuestLine(a, overrides))
           .join('\n');
         await db.upsertQuestEntry(userId, dateStr, 'Paladin of God', 'Warrior Skills', workoutLines);
         questWritten = true;
@@ -355,7 +374,7 @@ router.post('/activities/sync', authMiddleware, async (req: Request, res: Respon
 
   let xp: WearableXpResult;
   try {
-    xp = await awardWearableActivities(userId, dateStr, provider, data.activities);
+    xp = await awardWearableActivities(userId, dateStr, provider, data.activities, { overrides });
   } catch (xpErr) {
     const msg = caughtErrorMessage(xpErr);
     console.error(`[FITBIT] ❌ Wearable XP award failed: ${msg}`);

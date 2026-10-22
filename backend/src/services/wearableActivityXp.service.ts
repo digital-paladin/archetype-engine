@@ -35,6 +35,39 @@ export type WearableWorkoutType =
   | 'workout-mobility'
   | 'workout-mma';
 
+/** Engine workout rates an override is allowed to name. No new constants. */
+export const WEARABLE_WORKOUT_TYPES: readonly WearableWorkoutType[] = [
+  'workout-strength',
+  'workout-cardio',
+  'workout-mobility',
+  'workout-mma',
+];
+
+export function isWearableWorkoutType(value: string): value is WearableWorkoutType {
+  return (WEARABLE_WORKOUT_TYPES as readonly string[]).includes(value);
+}
+
+/**
+ * Caller-supplied type for one wearable session. There is no Toggl client:
+ * the owner passes the type he already logged, matched by Fitbit sourceId
+ * or, if that misses, by start time. Re-typing a session that was already
+ * awarded is not supported; dedupe skips it.
+ */
+export interface WearableTypeOverride {
+  sourceId?: string;
+  /** Normalized "HH:MM". */
+  startTime?: string;
+  activityType: WearableWorkoutType;
+  label?: string;
+}
+
+export class WearableOverrideError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'WearableOverrideError';
+  }
+}
+
 /** Wearable start times are wall-clock "HH:MM" in the owner's zone. */
 export const WEARABLE_TIME_ZONE = 'America/Chicago';
 
@@ -48,14 +81,13 @@ const WALL_CLOCK = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/;
 
 /**
  * Map a wearable session label onto an engine workout type. Fitbit's "Sport"
- * is the owner's Tuesday Sambo, so that exact name is workout-mma. "Aerobic
- * Workout" is not martial arts and stays workout-cardio. Anything else that
+ * stays workout-cardio unless a sync override names that session (Sambo is
+ * not in the activity name). "Aerobic Workout" is also cardio. Anything that
  * is not clearly martial arts, mobility, or strength (walks, runs, swims,
  * bikes) uses workout-cardio, the lower of the two general rates.
  */
 export function classifyWearableActivity(name: string): WearableWorkoutType {
   const n = (name || '').trim().toLowerCase();
-  if (n === 'sport') return 'workout-mma';
   if (MMA.test(n)) return 'workout-mma';
   if (MOBILITY.test(n)) return 'workout-mobility';
   if (STRENGTH.test(n)) return 'workout-strength';
@@ -190,10 +222,88 @@ export interface WearableXpResult {
 }
 
 /** XP one session earns before any body-status penalty. Pure; used by tests and back-pay math. */
-export function wearableSessionXp(a: Pick<FitbitActivity, 'name' | 'durationMin'>): { activityType: WearableWorkoutType; xp: number } {
-  const activityType = classifyWearableActivity(a.name);
+export function wearableSessionXp(
+  a: Pick<FitbitActivity, 'name' | 'durationMin'> & { activityType?: WearableWorkoutType },
+): { activityType: WearableWorkoutType; xp: number } {
+  const activityType = a.activityType ?? classifyWearableActivity(a.name);
   const xp = new XpCalculatorService().calculateXP(activityType, a.durationMin);
   return { activityType, xp };
+}
+
+/** "Sport" + "Toggl: Sambo" → "Sport (Toggl: Sambo)". Brackets are stripped so a label cannot forge a dedupe tag. */
+export function wearableDisplayName(name: string, label?: string): string {
+  const base = (name || 'Activity').trim() || 'Activity';
+  const extra = label?.replace(/[\[\]]/g, '').trim();
+  if (!extra) return base;
+  return `${base} (${extra})`;
+}
+
+export function wearableQuestLine(a: FitbitActivity, overrides: WearableTypeOverride[] = []): string {
+  const matched = matchWearableOverride(a, overrides);
+  const name = wearableDisplayName(a.name, matched?.label);
+  return `${name} ${a.durationMin}min (${a.calories} cal${a.startTime ? ` @ ${a.startTime}` : ''})`;
+}
+
+/**
+ * sourceId wins. A start-time match is used only when no override names this
+ * session's sourceId. An override that names a different sourceId does not
+ * attach to another session that happens to start on the same minute.
+ */
+export function matchWearableOverride(
+  a: FitbitActivity,
+  overrides: WearableTypeOverride[],
+): WearableTypeOverride | undefined {
+  const id = a.sourceId?.trim();
+  if (id) {
+    const byId = overrides.find(o => o.sourceId === id);
+    if (byId) return byId;
+  }
+  const clock = a.startTime ? wallClock(a.startTime) : null;
+  if (!clock) return undefined;
+  return overrides.find(o => o.startTime === clock && (!o.sourceId || !id));
+}
+
+export function parseWearableOverrides(raw: unknown): WearableTypeOverride[] {
+  if (raw == null) return [];
+  if (!Array.isArray(raw)) throw new WearableOverrideError('overrides must be an array');
+  return raw.map((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new WearableOverrideError(`overrides[${index}] must be an object`);
+    }
+    const row = item as Record<string, unknown>;
+    if (typeof row.activityType !== 'string' || !isWearableWorkoutType(row.activityType)) {
+      throw new WearableOverrideError(
+        `overrides[${index}].activityType must be one of ${WEARABLE_WORKOUT_TYPES.join(', ')}`,
+      );
+    }
+    let sourceId: string | undefined;
+    if (row.sourceId != null) {
+      if (typeof row.sourceId !== 'string' || !row.sourceId.trim()) {
+        throw new WearableOverrideError(`overrides[${index}].sourceId must be a non-empty string`);
+      }
+      sourceId = row.sourceId.trim();
+    }
+    let startTime: string | undefined;
+    if (row.startTime != null) {
+      if (typeof row.startTime !== 'string') {
+        throw new WearableOverrideError(`overrides[${index}].startTime must be HH:MM`);
+      }
+      const clock = wallClock(row.startTime);
+      if (!clock) throw new WearableOverrideError(`overrides[${index}].startTime must be HH:MM`);
+      startTime = clock;
+    }
+    if (!sourceId && !startTime) {
+      throw new WearableOverrideError(`overrides[${index}] needs a sourceId or startTime`);
+    }
+    let label: string | undefined;
+    if (row.label != null) {
+      if (typeof row.label !== 'string') {
+        throw new WearableOverrideError(`overrides[${index}].label must be a string`);
+      }
+      label = row.label.replace(/[\[\]]/g, '').trim() || undefined;
+    }
+    return { sourceId, startTime, activityType: row.activityType, label };
+  });
 }
 
 interface WearableSeen {
@@ -252,9 +362,11 @@ export function awardWearableActivities(
   date: string,
   provider: 'google' | 'fitbit' | 'oura' | string,
   activities: FitbitActivity[],
-  now: Date = new Date(),
+  nowOrOptions: Date | { now?: Date; overrides?: WearableTypeOverride[] } = new Date(),
 ): Promise<WearableXpResult> {
-  return serialized(() => awardUnlocked(userId, date, provider, activities, now));
+  const now = nowOrOptions instanceof Date ? nowOrOptions : (nowOrOptions.now ?? new Date());
+  const overrides = nowOrOptions instanceof Date ? [] : (nowOrOptions.overrides ?? []);
+  return serialized(() => awardUnlocked(userId, date, provider, activities, now, overrides));
 }
 
 async function awardUnlocked(
@@ -263,6 +375,7 @@ async function awardUnlocked(
   provider: string,
   activities: FitbitActivity[],
   now: Date,
+  overrides: WearableTypeOverride[],
 ): Promise<WearableXpResult> {
   const result: WearableXpResult = { date, awarded: [], skipped: [], totalXp: 0 };
   if (activities.length === 0) return result;
@@ -324,12 +437,14 @@ async function awardUnlocked(
       throw err;
     }
 
-    const { activityType, xp: rawXp } = wearableSessionXp(a);
+    const override = matchWearableOverride(a, overrides);
+    const displayName = wearableDisplayName(a.name, override?.label);
+    const { activityType, xp: rawXp } = wearableSessionXp({ ...a, activityType: override?.activityType });
     const penalty = penaltyByType[activityType] ?? 0;
     const xp = Math.round(rawXp * (100 - penalty) / 100);
     const className = toCanonicalClassName(new XpCalculatorService().getCategoryFromActivity(activityType));
     const tags = [slot, id].filter(Boolean).join(' ');
-    const detail = `${a.name} ${a.durationMin}min (${a.calories} cal${a.startTime ? ` @ ${a.startTime}` : ''})`;
+    const detail = `${displayName} ${a.durationMin}min (${a.calories} cal${a.startTime ? ` @ ${a.startTime}` : ''})`;
     const notes = `${tags} Wearable (${provider}): ${detail}`;
 
     // Log first, then credit XP, same order as POST /api/activities. A stats
@@ -346,7 +461,7 @@ async function awardUnlocked(
     await persistClassXpAwards(userId, [{ className, xp }]);
 
     rememberNotes(notes, seen);
-    result.awarded.push({ name: a.name, activityType, durationMin: a.durationMin, xp, tag: slot });
+    result.awarded.push({ name: displayName, activityType, durationMin: a.durationMin, xp, tag: slot });
     result.totalXp += xp;
   }
 
