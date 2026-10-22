@@ -28,6 +28,11 @@ export interface FitbitActivity {
   startTime: string;      // "HH:MM"
   /** Provider's own id for this session (Fitbit logId, Google Health data point name). */
   sourceId?: string;
+  /**
+   * Fitbit log type when the payload has one (`auto_detected`, `manual`,
+   * `tracker`, `mobile_run`). Absent for Google Health.
+   */
+  logType?: string;
 }
 
 export interface HeartZone {
@@ -282,6 +287,7 @@ export class FitbitService {
       distanceKm: (a.distance > 0) ? Math.round(a.distance * 10) / 10   : undefined,
       startTime:  a.startTime || '',
       sourceId:   a.logId != null ? String(a.logId) : undefined,
+      logType:    typeof a.logType === 'string' && a.logType.trim() ? a.logType.trim() : undefined,
     }));
     const result: ActivitySummary = {
       steps:                summary.steps || 0,

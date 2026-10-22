@@ -129,6 +129,26 @@ describe('fitbit routes provider switch', () => {
     expect(mockAwardWearable).toHaveBeenCalledWith('user-1', '2026-10-18', 'google', activities);
   });
 
+  it('POST sync writes an auto-detected walk into the quest and still passes it to the awarder', async () => {
+    mockFitbit.isConfigured.mockReturnValue(true);
+    const activities = [
+      { name: 'Walk', durationMin: 12, calories: 40, startTime: '07:10', logType: 'auto_detected' },
+      { name: 'Sport', durationMin: 45, calories: 459, startTime: '18:03', logType: 'tracker' },
+    ];
+    mockFitbit.getActivities.mockResolvedValue({
+      steps: 4000, activeMinutes: 50, caloriesOut: 2000, activities,
+    });
+
+    const res = await request(app()).post('/api/fitbit/activities/sync').send({ date: '2026-10-13' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.questWritten).toBe(true);
+    const quest = mockUpsertQuest.mock.calls[0][4] as string;
+    expect(quest).toContain('Walk 12min');
+    expect(quest).toContain('Sport 45min');
+    expect(mockAwardWearable).toHaveBeenCalledWith('user-1', '2026-10-13', 'fitbit', activities);
+  });
+
   it('POST sync keeps an existing Warrior Skills entry but still awards XP', async () => {
     mockFitbit.isConfigured.mockReturnValue(true);
     mockFitbit.getActivities.mockResolvedValue({

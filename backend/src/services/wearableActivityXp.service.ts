@@ -47,17 +47,35 @@ const STRENGTH = /(weight|strength|lift|circuit|crossfit|calisthen|resistance|bo
 const WALL_CLOCK = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/;
 
 /**
- * Map a wearable session label onto an engine workout type. Anything that is
- * not clearly martial arts, mobility or strength (walks, runs, swims, bikes,
- * Fitbit's generic "Sport" / "Aerobic Workout") uses workout-cardio, the lower
- * of the two general rates.
+ * Map a wearable session label onto an engine workout type. Fitbit's "Sport"
+ * is the owner's Tuesday Sambo, so that exact name is workout-mma. "Aerobic
+ * Workout" is not martial arts and stays workout-cardio. Anything else that
+ * is not clearly martial arts, mobility, or strength (walks, runs, swims,
+ * bikes) uses workout-cardio, the lower of the two general rates.
  */
 export function classifyWearableActivity(name: string): WearableWorkoutType {
-  const n = (name || '').toLowerCase();
+  const n = (name || '').trim().toLowerCase();
+  if (n === 'sport') return 'workout-mma';
   if (MMA.test(n)) return 'workout-mma';
   if (MOBILITY.test(n)) return 'workout-mobility';
   if (STRENGTH.test(n)) return 'workout-strength';
   return 'workout-cardio';
+}
+
+/**
+ * Auto-detected walks do not earn XP. Fitbit marks those `auto_detected`.
+ * When the payload has no log type (older Fitbit rows, Google Health), a Walk
+ * under 30 minutes is treated the same way. A Walk he logs or starts by hand
+ * (`manual`, `tracker`, anything other than `auto_detected`) still earns
+ * cardio XP, including a short one. The quest text is written from the full
+ * activity list, so a skipped walk still shows there.
+ */
+export function isAutoDetectedWalk(a: Pick<FitbitActivity, 'name' | 'durationMin' | 'logType'>): boolean {
+  if ((a.name || '').trim().toLowerCase() !== 'walk') return false;
+  const logType = a.logType?.trim().toLowerCase();
+  if (logType === 'auto_detected') return true;
+  if (!logType) return (a.durationMin ?? 0) < 30;
+  return false;
 }
 
 /** "H:MM" or "HH:MM:SS" → "HH:MM". Null when it is not a clock time. */
@@ -160,7 +178,7 @@ export interface WearableXpAward {
 
 export interface WearableXpSkip {
   name: string;
-  reason: 'already_awarded' | 'no_duration' | 'outside_window' | 'future' | 'invalid_time';
+  reason: 'already_awarded' | 'no_duration' | 'outside_window' | 'future' | 'invalid_time' | 'auto_walk';
   tag: string;
 }
 
@@ -276,6 +294,10 @@ async function awardUnlocked(
     }
     if (!a.durationMin || a.durationMin <= 0) {
       result.skipped.push({ name: a.name, reason: 'no_duration', tag: slot });
+      continue;
+    }
+    if (isAutoDetectedWalk(a)) {
+      result.skipped.push({ name: a.name, reason: 'auto_walk', tag: slot });
       continue;
     }
 

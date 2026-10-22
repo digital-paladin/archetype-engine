@@ -340,6 +340,7 @@ router.post('/activities/sync', authMiddleware, async (req: Request, res: Respon
       const existing = rows.find(r => r.class_name === 'Paladin of God' && r.quest_label === 'Warrior Skills');
       const hasContent = existing?.content && existing.content.trim() !== '[To be logged]';
       if (!hasContent) {
+        // Every fetched session, including auto-detected walks that earn no XP.
         const workoutLines = data.activities
           .map(a => `${a.name} ${a.durationMin}min (${a.calories} cal${a.startTime ? ` @ ${a.startTime}` : ''})`)
           .join('\n');
