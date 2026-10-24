@@ -133,7 +133,7 @@ archetype-engine/
         └── ...                 20+ additional panels
 ```
 
-**Data layer:** PostgreSQL via Supabase. Character stats, XP history, journal entries, ACM logs, and sidecar data (vault, courage, spending) live in structured tables. Status effects do too, once `supabase/migrations/012_status_effects.sql` is applied — see [docs/CONSUMPTION-EFFECTS.md](docs/CONSUMPTION-EFFECTS.md). Local markdown files remain the human-readable source of truth during the single-user phase.
+**Data layer:** PostgreSQL via Supabase. Character stats, XP history, journal entries, ACM logs, and sidecar data (vault, courage, spending) live in structured tables. Status effects do too, once `supabase/migrations/012_status_effects.sql` is applied — see [docs/CONSUMPTION-EFFECTS.md](docs/CONSUMPTION-EFFECTS.md). Optional daily vitals (`hrv_ms`, `resting_hr`, `spo2_pct`, `vitals_source`) land on the journal once `supabase/migrations/013_journal_vitals.sql` is applied; `POST /api/daily-metrics` accepts them and they do not award XP. Local markdown files remain the human-readable source of truth during the single-user phase.
 
 ---
 

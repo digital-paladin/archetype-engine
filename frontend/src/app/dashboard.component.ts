@@ -216,6 +216,22 @@ const NAV_TABS: { id: PanelId; icon: string; label: string }[] = [
               <span class="eso-label">❤ Resting HR</span>
               <span class="eso-value">{{ restingHR() }} bpm</span>
             </div>
+            <div *ngIf="storedVitals()?.hrvMs != null" class="eso-stat-row" data-testid="stored-hrv">
+              <span class="eso-label">♡ HRV</span>
+              <span class="eso-value">{{ storedVitals()!.hrvMs }} ms</span>
+            </div>
+            <div *ngIf="storedVitals()?.restingHr != null" class="eso-stat-row" data-testid="stored-resting-hr">
+              <span class="eso-label">❤ Stored resting HR</span>
+              <span class="eso-value">{{ storedVitals()!.restingHr }} bpm</span>
+            </div>
+            <div *ngIf="storedVitals()?.spo2Pct != null" class="eso-stat-row" data-testid="stored-spo2">
+              <span class="eso-label">🫁 SpO₂</span>
+              <span class="eso-value">{{ storedVitals()!.spo2Pct }}%</span>
+            </div>
+            <div *ngIf="storedVitals()?.source" class="eso-stat-row" data-testid="stored-vitals-source">
+              <span class="eso-label">Vitals source</span>
+              <span class="eso-value">{{ storedVitals()!.source }}</span>
+            </div>
 
             <!-- Stress & Energy (always visible, editable) -->
             <div class="eso-divider"></div>
@@ -509,6 +525,8 @@ export class DashboardComponent implements OnInit, OnDestroy {
   monthSleep          = signal<SleepDayData[] | null>(null);
   activitiesData      = signal<ActivitySummary | null>(null);
   restingHR           = signal<number | null>(null);
+  /** Journal vitals from GET /api/daily-metrics. Read-only; Fitbit vitals stay on vitalsData. */
+  storedVitals        = signal<{ hrvMs: number | null; restingHr: number | null; spo2Pct: number | null; source: string | null } | null>(null);
   vitalsData          = signal<VitalsData | null>(null);
   foodData            = signal<FoodLog | null>(null);
   selectedDate        = signal(new Date().toLocaleDateString('en-CA'));
@@ -675,13 +693,30 @@ export class DashboardComponent implements OnInit, OnDestroy {
       error: () => { /* Non-fatal */ }
     });
 
-    // Stress & Energy — today
-    this.http.get<{ success: boolean; metrics: { stress: { stress: string | null; energy: number | null; mentalState: string } } }>(
+    // Stress & Energy — today. Vitals on the same payload are shown read-only.
+    this.http.get<{
+      success: boolean;
+      metrics?: {
+        stress?: { stress: string | null; energy: number | null; mentalState: string };
+        hrvMs?: number | null;
+        restingHr?: number | null;
+        spo2Pct?: number | null;
+        source?: string | null;
+      };
+    }>(
       `${environment.apiUrl}/api/daily-metrics?date=${localDate}`
     ).subscribe({
       next: (res) => {
         if (res.success && res.metrics?.stress) {
           this.stressEnergy.set(res.metrics.stress);
+        }
+        if (res.success && res.metrics) {
+          this.storedVitals.set({
+            hrvMs: res.metrics.hrvMs ?? null,
+            restingHr: res.metrics.restingHr ?? null,
+            spo2Pct: res.metrics.spo2Pct ?? null,
+            source: res.metrics.source ?? null,
+          });
         }
       },
       error: () => { /* Non-fatal */ }
