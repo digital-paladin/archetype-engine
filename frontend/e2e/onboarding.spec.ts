@@ -48,7 +48,18 @@ test.describe('Thin onboarding', () => {
     await expect(page.locator('#suggested-class')).toBeVisible({ timeout: 10_000 });
 
     await page.getByRole('button', { name: 'Begin journey' }).click();
-    await expect(page).toHaveURL(/\/dashboard/, { timeout: 60_000 });
+
+    // A signup error leaves the Hunter on /login. Surface that text instead of
+    // waiting out the URL timeout with no server message in the log.
+    const errorBox = page.locator('.error-message');
+    const outcome = await Promise.race([
+      page.waitForURL(/\/dashboard/, { timeout: 60_000 }).then(() => 'dashboard' as const),
+      errorBox.waitFor({ state: 'visible', timeout: 60_000 }).then(async () => {
+        const text = (await errorBox.innerText()).replace(/\s+/g, ' ').trim();
+        return `error: ${text}` as const;
+      }),
+    ]);
+    expect(outcome, 'signup should leave /login for the dashboard').toBe('dashboard');
     await expect(page.locator('.level-badge')).toContainText(String(age), {
       timeout: 30_000,
     });
