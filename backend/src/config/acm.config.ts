@@ -39,7 +39,7 @@ export const ACTION_ITEMS_LABELS: string[] = [
   'Consumed trackable protein (0.64g/lb+ of total bodyweight per day)', // 11
   'Pre-Sleep Bonfire Routine',                              // 12
   'DR-ALFRED Supplement Stack (cognitive + physical + sleep stacks)', // 13
-  'Deep Work Progress — Linguist (Russian / Kinyarwanda, 20+ min)', // 14
+  'Deep Work Progress — Linguist (any language, 20+ min)', // 14
 ];
 
 /** Derived count — never hardcode this number directly */
