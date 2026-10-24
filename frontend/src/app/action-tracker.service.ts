@@ -7,6 +7,7 @@ import { XpCalculationService, XPCalculation } from './xp-calculation.service';
 import { ConsolidationService, ConsolidationResult } from './consolidation.service';
 import { LevelProgressionService, LevelUpResult } from './level-progression.service';
 import { environment } from '../environments/environment';
+import { ACTIVITIES_PATH, toBackendActivityType } from './activity-type-map';
 
 export interface ActiveAction {
   type: 'prayer' | 'workout' | 'coding' | 'redteam' | 'artist' | 'lab' | 'meal' | 'water' | 'fasting' | 'combat';
@@ -57,6 +58,11 @@ export class ActionTrackerService {
   /** rot.js EventQueue — holds ordered milestone payloads, drained as elapsed time crosses each gate */
   private milestoneQueue!: EventQueue;
   private nextMilestoneIdx = 0;
+  /**
+   * Set when another caller (the session panel) is already posting this
+   * action. completeAction then skips its own journal write.
+   */
+  private journalPostClaimed = false;
 
   constructor(
     private xpCalc: XpCalculationService,
@@ -89,6 +95,7 @@ export class ActionTrackerService {
     if (this.currentAction$.value) {
       this.cancelAction();
     }
+    this.journalPostClaimed = false;
 
     const action: ActiveAction = {
       type,
@@ -124,21 +131,30 @@ export class ActionTrackerService {
     console.log(`[Action Tracker] Started: ${type} (${activityKey}) - ${intensity} intensity - ${targetResult}`);
   }
 
-  completeAction(): ActiveAction | null {
+  /**
+   * Mark the in-flight journal write as already owned by the caller.
+   * The session panel posts the rich notes itself; completeAction must not
+   * post a second time.
+   */
+  claimJournalPost(): void {
+    this.journalPostClaimed = true;
+  }
+
+  completeAction(options?: { skipJournal?: boolean; notes?: string }): ActiveAction | null {
     const action = this.currentAction$.value;
     if (!action) return null;
+
+    const skipJournal = options?.skipJournal === true || this.journalPostClaimed;
+    this.journalPostClaimed = false;
 
     // Stop timer
     this.stopTimer();
 
-    // Calculate XP based on duration, intensity, and bonuses
+    // Calculate XP based on duration, intensity, and bonuses.
+    // Skill keys such as prayer-routine are not all in the local XP table;
+    // a missing rate must not block the journal post or leave the action stuck.
     const hours = action.duration / 3600; // Convert seconds to hours
-    const xpCalculation = this.xpCalc.calculatePendingXP(
-      action.activityKey,
-      hours,
-      action.intensity,
-      action.bonusKeys
-    );
+    const xpCalculation = this.pendingXpOrZero(action, hours);
 
     // Mark as completed with XP calculation
     const completedAction: ActiveAction = {
@@ -150,8 +166,10 @@ export class ActionTrackerService {
     // Add to history
     this.addToHistory(completedAction, true);
 
-    // Log to journal via backend
-    this.logActivityToJournal(completedAction);
+    // Log to journal via backend. One post per completion.
+    if (!skipJournal) {
+      this.logActivityToJournal(completedAction, options?.notes);
+    }
 
     // Clear current action
     this.currentAction$.next(null);
@@ -190,6 +208,8 @@ export class ActionTrackerService {
     if (!action) return;
 
     console.log(`[Action Tracker] Cancelled: ${action.type} - ${action.duration}s`);
+
+    this.journalPostClaimed = false;
 
     // Stop timer
     this.stopTimer();
@@ -275,18 +295,52 @@ export class ActionTrackerService {
     this.saveHistoryToStorage(updatedHistory);
   }
 
-  private logActivityToJournal(action: ActiveAction): void {
+  private pendingXpOrZero(action: ActiveAction, hours: number): XPCalculation {
+    try {
+      return this.xpCalc.calculatePendingXP(
+        action.activityKey,
+        hours,
+        action.intensity,
+        action.bonusKeys
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '';
+      if (!message.startsWith('Unknown activity:')) throw err;
+      return {
+        hours,
+        baseRate: 0,
+        intensityMultiplier: 1,
+        baseXP: 0,
+        bonuses: [],
+        totalBonusXP: 0,
+        pendingXP: 0,
+        category: 'general',
+      };
+    }
+  }
+
+  private logActivityToJournal(action: ActiveAction, notesOverride?: string): void {
+    const activityType = toBackendActivityType(action.activityKey);
+    if (!activityType) {
+      console.warn(`[Action Tracker] Skipping journal post — no backend activity type for "${action.activityKey}"`);
+      return;
+    }
+
     const durationMinutes = action.duration > 0 ? Math.round(action.duration / 60) : undefined;
     const pendingXp = action.xpCalculated?.pendingXP;
+    const notes = [notesOverride, action.targetResult, action.quest ? `Quest: ${action.quest}` : undefined, action.skillId]
+      .map(part => (typeof part === 'string' ? part.trim() : ''))
+      .filter((part, index, all) => part.length > 0 && all.indexOf(part) === index)
+      .join(' | ');
     const body: { activityType: string; duration?: number; notes?: string; xp?: number; clientDate?: string } = {
-      activityType: action.targetResult || action.activityKey,
+      activityType,
       ...(durationMinutes !== undefined && { duration: durationMinutes }),
-      ...(action.skillId && { notes: action.skillId }),
-      ...(pendingXp !== undefined && { xp: pendingXp }),
+      ...(notes && { notes }),
+      ...(typeof pendingXp === 'number' && pendingXp > 0 && { xp: pendingXp }),
       clientDate: new Date().toLocaleDateString('en-CA')
     };
 
-    this.http.post(`${environment.apiUrl}/api/activities`, body).subscribe({
+    this.http.post(`${environment.apiUrl}${ACTIVITIES_PATH}`, body).subscribe({
       next: () => console.log(`[Action Tracker] Journal logged: ${body.activityType}`),
       error: err => console.error('[Action Tracker] Journal log failed:', err)
     });

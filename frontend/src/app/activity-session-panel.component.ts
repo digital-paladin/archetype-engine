@@ -7,6 +7,7 @@ import { HttpClient } from '@angular/common/http';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ActionTrackerService } from './action-tracker.service';
 import { environment } from '../environments/environment';
+import { ACTIVITIES_PATH, toBackendActivityType } from './activity-type-map';
 
 // ── Workout data ────────────────────────────────────────────────
 const PROGRAM_START = new Date(2026, 1, 9); // Feb 9, 2026
@@ -68,24 +69,6 @@ function detectWorkoutDay(): WorkoutDay {
   if (dow === 5) return 'deadlift';
   return 'open';
 }
-
-// ── Activity-key → backend activityType map ───────────────────
-const ACTIVITY_TYPE_MAP: Record<string, string> = {
-  'workout-strength': 'workout-strength',
-  'workout-cardio':   'workout-cardio',
-  'workout-mma':      'workout-mma',
-  'coding-routine':   'personal-project',
-  'paladin-app-dev':  'paladin-app-dev',       // multi-class: Developer + Sage + Artist
-  'htb-medium':       'redteam-lab',
-  'prayer-routine':   'personal-project',      // fallback until added to xpCalculator
-  'art-drawing':      'art-drawing',
-  'christian-art-visual':  'christian-art-visual',  // multi-class: Artist + Sage
-  'christian-art-music':   'christian-art-music',   // multi-class: Artist + Sage
-  'christian-art-poetry':  'christian-art-poetry',  // multi-class: Artist + Sage
-  'deep-focus':       'personal-project',
-  'hydration':        'personal-project',
-  'daily-log':        'personal-project',
-};
 
 // ── Component ─────────────────────────────────────────────────
 @Component({
@@ -1115,13 +1098,24 @@ export class ActivitySessionPanelComponent implements OnDestroy {
     const action = this.currentAction();
     if (!action || this.isSubmitting()) return;
 
+    const notes = this.buildNotes();
+    const activityType = toBackendActivityType(action.activityKey);
+    const durationMin = Math.max(1, Math.round(action.duration / 60));
+
+    // Hydration and other non-class keys must not fall through to Developer.
+    if (!activityType) {
+      this.clearRestTimer();
+      this.actionTracker.cancelAction();
+      this.resetTemplateState();
+      return;
+    }
+
     this.isSubmitting.set(true);
-    const notes      = this.buildNotes();
-    const activityType = ACTIVITY_TYPE_MAP[action.activityKey] ?? 'personal-project';
-    const durationMin  = Math.max(1, Math.round(action.duration / 60));
+    // Own the journal write so completeAction does not post the free-text label too.
+    this.actionTracker.claimJournalPost();
 
     this.http.post<{ xp?: number; xpAwards?: Array<{ class: string; xp: number }>; message?: string; error?: string }>(
-      `${environment.apiUrl}/api/activities`,
+      `${environment.apiUrl}${ACTIVITIES_PATH}`,
       { activityType, duration: durationMin, notes }
     ).subscribe({
       next: (res) => {
@@ -1133,7 +1127,7 @@ export class ActivitySessionPanelComponent implements OnDestroy {
         this.clearRestTimer();
         setTimeout(() => {
           this.isSubmitting.set(false);
-          this.actionTracker.completeAction();
+          this.actionTracker.completeAction({ skipJournal: true });
           this.completeStatus.set('');
           this.resetTemplateState();
         }, 1400);
@@ -1144,7 +1138,7 @@ export class ActivitySessionPanelComponent implements OnDestroy {
         this.clearRestTimer();
         setTimeout(() => {
           this.isSubmitting.set(false);
-          this.actionTracker.completeAction();
+          this.actionTracker.completeAction({ skipJournal: true });
           this.completeStatus.set('');
           this.resetTemplateState();
         }, 2500);

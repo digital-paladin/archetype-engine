@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
 import { environment } from '../environments/environment';
+import { ACTIVITIES_PATH, toBackendActivityType } from './activity-type-map';
 
 interface ActivityType {
   type: string;
@@ -35,8 +36,8 @@ interface ActivityType {
               <option value="redteam-training">Training/Study</option>
             </optgroup>
             <optgroup label="Developer">
-              <option value="dev-story">Developer Story Work</option>
-              <option value="dev-bug-fix">Developer Bug Fix</option>
+              <option value="iq2-story">Developer Story Work</option>
+              <option value="iq2-bug-fix">Developer Bug Fix</option>
               <option value="personal-project">Personal Project</option>
             </optgroup>
             <optgroup label="Warrior">
@@ -295,20 +296,22 @@ export class QuickLogComponent {
   constructor(private http: HttpClient) {}
 
   onActivityTypeChange() {
-    const recovery = this.activityType.startsWith('recovery-');
+    const resolved = toBackendActivityType(this.activityType);
+    const recovery = !!resolved && resolved.startsWith('recovery-');
     this.recoveryQuest.set(recovery);
     if (!recovery) this.claimDate = '';
     this.updateXpPreview();
   }
 
   updateXpPreview() {
-    if (!this.activityType) {
+    const activityType = toBackendActivityType(this.activityType);
+    if (!activityType) {
       this.xpPreview.set(0);
       return;
     }
 
     const duration = this.duration || undefined;
-    const url = `${environment.apiUrl}/api/activities/calculate-xp?type=${this.activityType}${duration ? `&duration=${duration}` : ''}`;
+    const url = `${environment.apiUrl}${ACTIVITIES_PATH}/calculate-xp?type=${activityType}${duration ? `&duration=${duration}` : ''}`;
 
     this.http.get<{ xp: number }>(url).subscribe({
       next: (response) => {
@@ -322,7 +325,8 @@ export class QuickLogComponent {
   }
 
   logActivity() {
-    if (!this.activityType) {
+    const activityType = toBackendActivityType(this.activityType);
+    if (!activityType) {
       return;
     }
 
@@ -330,7 +334,7 @@ export class QuickLogComponent {
     this.statusMessage.set('');
 
     const payload: Record<string, unknown> = {
-      activityType: this.activityType,
+      activityType,
       duration: this.duration || undefined,
       notes: this.notes || undefined
     };
@@ -344,7 +348,7 @@ export class QuickLogComponent {
     }
 
     this.http.post<{ success: boolean; xp: number; message: string }>(
-      `${environment.apiUrl}/api/activities`,
+      `${environment.apiUrl}${ACTIVITIES_PATH}`,
       payload
     ).subscribe({
       next: (response) => {
@@ -355,7 +359,7 @@ export class QuickLogComponent {
         // Emit event for parent component
         this.logged.emit({
           xp: response.xp,
-          activityType: this.activityType
+          activityType
         });
 
         // Clear form after 2 seconds

@@ -539,7 +539,7 @@ export class CharacterDisplayComponent implements OnInit, AfterViewInit, OnDestr
     
     this.actionTracker.startAction(
       'meal',
-      'prayer',
+      'protein',
       'Eating',
       'Consume trackable protein (0.64g/lb target)'
     );

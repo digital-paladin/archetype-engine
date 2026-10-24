@@ -3,6 +3,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { QuickLogComponent } from './quick-log.component';
 import { environment } from '../environments/environment';
+import { toBackendActivityType } from './activity-type-map';
 
 const CALC_URL = `${environment.apiUrl}/api/activities/calculate-xp`;
 const LOG_URL = `${environment.apiUrl}/api/activities`;
@@ -82,6 +83,29 @@ describe('QuickLogComponent', () => {
     fixture.detectChanges();
 
     expect(fixture.nativeElement.textContent).toContain('Rest Day Kept only counts on Thursday');
+  });
+
+  it('offers backend developer types and still accepts the old aliases', () => {
+    expect(optionValues()).toEqual(expect.arrayContaining(['iq2-story', 'iq2-bug-fix']));
+    expect(optionValues()).not.toContain('dev-story');
+    expect(optionValues()).not.toContain('dev-bug-fix');
+
+    for (const value of optionValues()) {
+      if (!value) continue;
+      expect(toBackendActivityType(value)).toBe(value);
+    }
+
+    component.activityType = 'dev-story';
+    component.logActivity();
+    const story = httpMock.expectOne(LOG_URL);
+    expect(story.request.body.activityType).toBe('iq2-story');
+    story.flush({ success: true, xp: 20, message: 'Activity logged successfully! +20 XP' });
+
+    component.activityType = 'dev-bug-fix';
+    component.logActivity();
+    const bug = httpMock.expectOne(LOG_URL);
+    expect(bug.request.body.activityType).toBe('iq2-bug-fix');
+    bug.flush({ success: true, xp: 15, message: 'Activity logged successfully! +15 XP' });
   });
 
   it('still sends multiplied XP for an ordinary activity', () => {

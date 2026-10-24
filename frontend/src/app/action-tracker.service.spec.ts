@@ -3,6 +3,7 @@
 
 import { firstValueFrom, of } from 'rxjs';
 import { ActionTrackerService, ActiveAction } from './action-tracker.service';
+import { environment } from '../environments/environment';
 
 describe('ActionTrackerService', () => {
   let service: ActionTrackerService;
@@ -20,6 +21,7 @@ describe('ActionTrackerService', () => {
     addXP: ReturnType<typeof vi.fn>;
     getCurrentProgress: ReturnType<typeof vi.fn>;
   };
+  let httpPost: ReturnType<typeof vi.fn>;
 
   const mockXPCalculation = {
     hours: 1,
@@ -85,11 +87,13 @@ describe('ActionTrackerService', () => {
       }),
     };
 
+    httpPost = vi.fn().mockReturnValue(of(null));
+
     service = new ActionTrackerService(
       xpCalcMock as any,
       consolidationMock as any,
       levelProgMock as any,
-      { get: vi.fn().mockReturnValue(of(null)), post: vi.fn().mockReturnValue(of(null)), put: vi.fn().mockReturnValue(of(null)), delete: vi.fn().mockReturnValue(of(null)) } as any
+      { get: vi.fn().mockReturnValue(of(null)), post: httpPost, put: vi.fn().mockReturnValue(of(null)), delete: vi.fn().mockReturnValue(of(null)) } as any
     );
   });
 
@@ -460,6 +464,72 @@ describe('ActionTrackerService', () => {
       }
       const history = await firstValueFrom(service.getActionHistory());
       expect(history.length).toBeLessThanOrEqual(50);
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────
+  // Journal post — one request, backend activity type
+  // ─────────────────────────────────────────────────────────────
+  describe('journal post', () => {
+    it('posts once to /api/activities using the activity key, not the free-text target', () => {
+      service.startAction('coding', 'coding-routine', 'Typing', 'Fix the login bug', 'routine', 'IQ-8525');
+      service.completeAction();
+
+      expect(httpPost).toHaveBeenCalledTimes(1);
+      const [url, body] = httpPost.mock.calls[0];
+      expect(url).toBe(`${environment.apiUrl}/api/activities`);
+      expect(body.activityType).toBe('personal-project');
+      expect(body.notes).toContain('Fix the login bug');
+      expect(body.notes).toContain('Quest: IQ-8525');
+    });
+
+    it('maps Start Prayer onto prayer-routine instead of the prompt text', () => {
+      service.startAction('prayer', 'prayer', 'Praying', 'Complete daily devotional and prayer');
+      service.completeAction();
+
+      expect(httpPost).toHaveBeenCalledTimes(1);
+      expect(httpPost.mock.calls[0][1].activityType).toBe('prayer-routine');
+    });
+
+    it('maps an MMA session to workout-mma', () => {
+      service.startAction('workout', 'mma-class', 'Sparring', 'Pad work');
+      service.completeAction();
+
+      expect(httpPost).toHaveBeenCalledTimes(1);
+      expect(httpPost.mock.calls[0][1].activityType).toBe('workout-mma');
+    });
+
+    it('still posts once when the local XP table does not know the skill key', () => {
+      xpCalcMock.calculatePendingXP.mockImplementation((key: string) => {
+        if (key === 'prayer-routine') throw new Error(`Unknown activity: ${key}`);
+        return mockXPCalculation;
+      });
+
+      service.startAction('prayer', 'prayer-routine', 'Praying', 'Morning prayer');
+      expect(() => service.completeAction()).not.toThrow();
+      expect(httpPost).toHaveBeenCalledTimes(1);
+      expect(httpPost.mock.calls[0][1].activityType).toBe('prayer-routine');
+    });
+
+    it('does not post when the session panel already claimed the journal write', () => {
+      service.startAction('coding', 'coding-routine', 'Typing', 'Fix the login bug');
+      service.claimJournalPost();
+      service.completeAction();
+      expect(httpPost).not.toHaveBeenCalled();
+    });
+
+    it('does not post when skipJournal is set', () => {
+      service.startAction('workout', 'workout-strength', 'Push Up', 'Complete physical training session');
+      service.completeAction({ skipJournal: true });
+      expect(httpPost).not.toHaveBeenCalled();
+    });
+
+    it('does not post hydration or protein as a class activity', () => {
+      service.startAction('water', 'hydration', 'Happy Idle', 'Drink water');
+      service.completeAction();
+      service.startAction('meal', 'protein', 'Eating', 'Consume trackable protein (0.64g/lb target)');
+      service.completeAction();
+      expect(httpPost).not.toHaveBeenCalled();
     });
   });
 

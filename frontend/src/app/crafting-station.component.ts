@@ -5,6 +5,7 @@ import { HttpClient } from '@angular/common/http';
 import { of } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 import { environment } from '../environments/environment';
+import { ACTIVITIES_PATH, toBackendActivityType } from './activity-type-map';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -991,7 +992,7 @@ export class CraftingStationComponent implements OnInit {
       completedAt: new Date().toISOString(),
     });
     // Award real XP via backend
-    this.http.post(`${environment.apiUrl}/api/activities`, {
+    this.http.post(`${environment.apiUrl}${ACTIVITIES_PATH}`, {
       activityType: this.recipeToActivityType(recipe),
       xp: recipe.xpReward,
       notes: `Crafted: ${recipe.outputName}`,
@@ -1012,7 +1013,7 @@ export class CraftingStationComponent implements OnInit {
       'quantconnect': 'financial-project',
       'redteam':      'redteam-lab',
     };
-    return subMap[recipe.sub ?? ''] ?? 'personal-project';
+    return toBackendActivityType(subMap[recipe.sub ?? ''] ?? 'personal-project') ?? 'personal-project';
   }
 
   // ── Strip helpers ─────────────────────────────────────────────────────────────

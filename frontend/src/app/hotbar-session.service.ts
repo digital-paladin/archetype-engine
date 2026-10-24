@@ -3,6 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { take } from 'rxjs/operators';
 import { Skill, SkillCategory, ExerciseSet } from './skill-tree.data';
 import { environment } from '../environments/environment';
+import { ACTIVITIES_PATH, toBackendActivityType } from './activity-type-map';
 
 interface SessionState {
   startTime: Date;
@@ -13,7 +14,8 @@ interface SessionState {
 }
 
 interface CategoryConfig {
-  activityKey: string;    // matches XpCalculatorService keys
+  /** Frontend session key. Translated by toBackendActivityType before POST. */
+  activityKey: string;
   journalCategory: string;
 }
 
@@ -43,7 +45,7 @@ const CATEGORY_CONFIG: Partial<Record<SkillCategory, CategoryConfig | null>> = {
  *   - Starts on the first skill activation for a category.
  *   - Idle timer (30 min) resets on every subsequent press.
  *   - When the timer fires (or commitAll() is called), a one-line summary
- *     is written to the journal via POST /api/activity.
+ *     is written to the journal via POST /api/activities.
  *
  * Example journal entry produced:
  *   "Jab ×8, Cross ×5, Hook ×3  [6:45 AM–7:12 AM]"  (MMA session)
@@ -169,9 +171,19 @@ export class HotbarSessionService implements OnDestroy {
     const durationMs = endTime.getTime() - session.startTime.getTime();
     const duration   = Math.max(1, Math.round(durationMs / 60_000)); // minutes, min 1
     const today      = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD
+    const activityType = toBackendActivityType(config.activityKey);
 
-    this.http.post(`${environment.apiUrl}/api/activity`, {
-      activityType: config.activityKey,
+    // Clear before the HTTP response to prevent double-commit on rapid re-trigger
+    if (session.idleTimer) clearTimeout(session.idleTimer);
+    this.sessions.delete(category);
+
+    if (!activityType) {
+      console.warn(`[HOTBAR SESSION] No backend activity type for ${category} (${config.activityKey})`);
+      return;
+    }
+
+    this.http.post(`${environment.apiUrl}${ACTIVITIES_PATH}`, {
+      activityType,
       duration,
       notes,
       clientDate: today,
@@ -179,9 +191,5 @@ export class HotbarSessionService implements OnDestroy {
       next: () => console.log(`[HOTBAR SESSION] ✅ ${category}: ${notes}`),
       error: (err: unknown) => console.error('[HOTBAR SESSION] Commit failed:', err),
     });
-
-    // Clear before the HTTP response to prevent double-commit on rapid re-trigger
-    if (session.idleTimer) clearTimeout(session.idleTimer);
-    this.sessions.delete(category);
   }
 }
