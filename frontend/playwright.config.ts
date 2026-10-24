@@ -25,6 +25,8 @@ export default defineConfig({
     // storageState applied only on chromium project after setup creates the file
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
+    // Record every run so the Owner can review agent UI work. Do not set this to 'off'.
+    video: 'on',
   },
 
   projects: [

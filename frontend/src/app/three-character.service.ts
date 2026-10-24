@@ -4,7 +4,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { BodyPart } from './body-status.interface';
 
 export interface ActivityAnimation {
-  type: 'prayer' | 'workout' | 'coding' | 'redteam' | 'artist' | 'fasting' | 'hydration' | 'protein' | 'levelup';
+  type: 'prayer' | 'workout' | 'coding' | 'redteam' | 'artist' | 'fasting' | 'hydration' | 'protein' | 'levelup' | 'combat';
   animationName: string;
   xpGain: number;
   loop: boolean;
@@ -236,6 +236,7 @@ export class ThreeCharacterService {
       { name: 'idle',       path: 'assets/animations/idle.glb' },
       { name: 'Praying',    path: 'assets/animations/prayer.glb' },
       { name: 'sword-idle', path: 'assets/animations/sword-idle.glb' },
+      { name: 'combat',     path: 'assets/animations/combat.glb' },
     ];
 
     // Collect ALL named nodes (not just isBone — GLTF loader may produce Object3D joints)
