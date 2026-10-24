@@ -48,10 +48,10 @@ export function isWearableWorkoutType(value: string): value is WearableWorkoutTy
 }
 
 /**
- * Caller-supplied type for one wearable session. There is no Toggl client:
- * the owner passes the type he already logged, matched by Fitbit sourceId
- * or, if that misses, by start time. Re-typing a session that was already
- * awarded is not supported; dedupe skips it.
+ * Caller-supplied type for one wearable session, matched by Fitbit sourceId
+ * or, if that misses, by start time. The sync route may also add one from
+ * Toggl Track when the request did not name that Sport session. Re-typing a
+ * session that was already awarded is not supported; dedupe skips it.
  */
 export interface WearableTypeOverride {
   sourceId?: string;
