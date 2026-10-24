@@ -298,7 +298,7 @@ The `/auth` and `/callback` routes are intentionally unprotected — OAuth redir
 
 ### Toggl Track (Sport session typing)
 
-Fitbit logs martial-arts classes as "Sport". `POST /api/fitbit/activities/sync` can type that session from the Toggl Track time entry with the greatest overlap (project name or tag): Sambo, BJJ, MMA, wrestling, and judo are `workout-mma`; lifting, strength, and resistance are `workout-strength`; PT, Hinge Health, mobility, and yoga are `workout-mobility`. The quest line and the activity notes look like `Sport (Toggl: Sambo)`. An explicit `overrides` entry on the sync request wins. If the token is unset, Toggl is unreachable, or nothing mapped overlaps, the session stays `workout-cardio` and the sync still succeeds.
+Fitbit logs martial-arts classes as "Sport". `POST /api/fitbit/activities/sync` can type that session from the Toggl Track time entry with the greatest overlap (project name, description, or tag): Sambo, BJJ, MMA, wrestling, and judo are `workout-mma`; lifting, strength, and resistance are `workout-strength`; PT, Hinge Health, mobility, stretch, stretching, and yoga are `workout-mobility`. The quest line and the activity notes look like `Sport (Toggl: Sambo)`. An explicit `overrides` entry on the sync request wins. If the token is unset, Toggl is unreachable, or nothing mapped overlaps, the session stays `workout-cardio` and the sync still succeeds. Parkour is not mapped, so it stays cardio.
 
 The owner must add `TOGGL_API_TOKEN` on Railway (Track → Profile → API token). The same variable can be set in local `backend/.env`. Do not commit the token. With it unset, wearable sync behaves as before.
 

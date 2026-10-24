@@ -1,6 +1,7 @@
 /**
  * Type a Fitbit "Sport" session from the Toggl Track entry with the greatest
- * time overlap, when the sync request did not already name that session.
+ * time overlap (project name, description, or tags), when the sync request
+ * did not already name that session.
  *
  * Explicit overrides win. An unreachable Toggl, a missing token, or an
  * unmapped entry leaves the session on workout-cardio and does not fail the
@@ -62,7 +63,7 @@ export function bestOverlappingTogglEntry(
     if (!span) continue;
     const overlap = overlapMs(interval, span);
     if (overlap <= 0) continue;
-    const mapped = mapTogglProjectOrTags(entry.projectName, entry.tags) != null;
+    const mapped = mapTogglProjectOrTags(entry.projectName, entry.tags, entry.description) != null;
     const candidate = { entry, overlap, startMs: span.startMs, mapped };
     if (!best) {
       best = candidate;
@@ -95,7 +96,7 @@ export function togglOverridesForSportSessions(
     if (!interval) continue;
     const winner = bestOverlappingTogglEntry(interval, entries, now);
     if (!winner) continue;
-    const mapped = mapTogglProjectOrTags(winner.projectName, winner.tags);
+    const mapped = mapTogglProjectOrTags(winner.projectName, winner.tags, winner.description);
     if (!mapped) continue;
     const sourceId = activity.sourceId?.trim() || undefined;
     const startTime = activity.startTime ? wallClock(activity.startTime) ?? undefined : undefined;

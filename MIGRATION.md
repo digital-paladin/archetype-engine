@@ -108,7 +108,7 @@ Set these in local `.env` and in Railway. Do not commit values.
 
 ### Toggl Track
 
-`TOGGL_API_TOKEN` must be added on Railway by the owner (Toggl Track → Profile → API token). The backend uses it as HTTP Basic auth against `https://api.track.toggl.com/api/v9/me/time_entries` to type a Fitbit "Sport" session from the overlapping time entry's project name or tag. Copy the same value into local `backend/.env` for development. Do not commit it. If the variable is unset, the integration is disabled, Sport sessions keep the `workout-cardio` rate, and everything else works as before.
+`TOGGL_API_TOKEN` must be added on Railway by the owner (Toggl Track → Profile → API token). The backend uses it as HTTP Basic auth against `https://api.track.toggl.com/api/v9/me/time_entries` to type a Fitbit "Sport" session from the overlapping time entry's project name, description, or tags. Copy the same value into local `backend/.env` for development. Do not commit it. If the variable is unset, the integration is disabled, Sport sessions keep the `workout-cardio` rate, and everything else works as before.
 
 ## OAuth scopes
 
