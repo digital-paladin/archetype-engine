@@ -32,6 +32,18 @@ jest.mock('../services/data/dataService', () => ({
     upsertQuestEntry: (...args: unknown[]) => mockUpsertQuest(...args),
   }),
 }));
+const mockAwardWearable = jest.fn();
+const mockLoadToggl = jest.fn();
+jest.mock('../services/togglWearableTyping.service', () => ({
+  loadTogglSportOverrides: (...args: unknown[]) => mockLoadToggl(...args),
+}));
+jest.mock('../services/wearableActivityXp.service', () => {
+  const actual = jest.requireActual('../services/wearableActivityXp.service');
+  return {
+    ...actual,
+    awardWearableActivities: (...args: unknown[]) => mockAwardWearable(...args),
+  };
+});
 jest.mock('../services/sleepDebt.service', () => ({
   syncSleepDebtFromJournalSafe: jest.fn().mockResolvedValue(undefined),
 }));
@@ -62,6 +74,8 @@ describe('fitbit routes provider switch', () => {
     mockUpsertJournal.mockResolvedValue(undefined);
     mockGetQuests.mockResolvedValue([]);
     mockUpsertQuest.mockResolvedValue(undefined);
+    mockAwardWearable.mockResolvedValue({ date: '2026-10-18', awarded: [], skipped: [], totalXp: 0 });
+    mockLoadToggl.mockResolvedValue([]);
     mockGoogle.isConfigured.mockReturnValue(false);
     mockGoogle.hasTokens.mockResolvedValue(false);
     mockFitbit.isConfigured.mockReturnValue(false);
@@ -73,10 +87,9 @@ describe('fitbit routes provider switch', () => {
     else process.env.FITBIT_DATA_SOURCE = original;
   });
 
-  it('uses Google Health activities and still writes the Warrior quest', async () => {
+  it('GET activities is read-only: no quest write and no XP', async () => {
     mockGoogle.isConfigured.mockReturnValue(true);
     mockGoogle.hasTokens.mockResolvedValue(true);
-    mockFitbit.isConfigured.mockReturnValue(true);
     mockGoogle.getActivities.mockResolvedValue({
       steps: 4000,
       activeMinutes: 30,
@@ -88,7 +101,32 @@ describe('fitbit routes provider switch', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.source).toBe('google-health');
-    expect(res.body.steps).toBe(4000);
+    expect(res.body.activities).toHaveLength(1);
+    expect(mockGetQuests).not.toHaveBeenCalled();
+    expect(mockUpsertQuest).not.toHaveBeenCalled();
+    expect(mockAwardWearable).not.toHaveBeenCalled();
+  });
+
+  it('POST sync uses Google Health, writes the Warrior quest and awards XP', async () => {
+    mockGoogle.isConfigured.mockReturnValue(true);
+    mockGoogle.hasTokens.mockResolvedValue(true);
+    mockFitbit.isConfigured.mockReturnValue(true);
+    const activities = [{ name: 'Walk', durationMin: 30, calories: 150, startTime: '08:00' }];
+    mockGoogle.getActivities.mockResolvedValue({ steps: 4000, activeMinutes: 30, caloriesOut: 2200, activities });
+    mockAwardWearable.mockResolvedValue({
+      date: '2026-10-18',
+      awarded: [{ name: 'Walk', activityType: 'workout-cardio', durationMin: 30, xp: 19, tag: '[wearable:2026-10-18T08:00]' }],
+      skipped: [],
+      totalXp: 19,
+    });
+
+    const res = await request(app()).post('/api/fitbit/activities/sync').send({ date: '2026-10-18' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.source).toBe('google-health');
+    expect(res.body.questWritten).toBe(true);
+    expect(res.body.xp.totalXp).toBe(19);
+    expect(mockGoogle.getActivities).toHaveBeenCalledWith('2026-10-18', 'user-1');
     expect(mockFitbit.getActivities).not.toHaveBeenCalled();
     expect(mockUpsertQuest).toHaveBeenCalledWith(
       'user-1',
@@ -96,6 +134,185 @@ describe('fitbit routes provider switch', () => {
       'Paladin of God',
       'Warrior Skills',
       expect.stringContaining('Walk 30min'),
+    );
+    expect(mockAwardWearable).toHaveBeenCalledWith('user-1', '2026-10-18', 'google', activities, { overrides: [] });
+  });
+
+  it('POST sync writes an auto-detected walk into the quest and still passes it to the awarder', async () => {
+    mockFitbit.isConfigured.mockReturnValue(true);
+    const activities = [
+      { name: 'Walk', durationMin: 12, calories: 40, startTime: '07:10', logType: 'auto_detected' },
+      { name: 'Sport', durationMin: 45, calories: 459, startTime: '18:03', logType: 'tracker' },
+    ];
+    mockFitbit.getActivities.mockResolvedValue({
+      steps: 4000, activeMinutes: 50, caloriesOut: 2000, activities,
+    });
+
+    const res = await request(app()).post('/api/fitbit/activities/sync').send({ date: '2026-10-13' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.questWritten).toBe(true);
+    const quest = mockUpsertQuest.mock.calls[0][4] as string;
+    expect(quest).toContain('Walk 12min');
+    expect(quest).toContain('Sport 45min');
+    expect(mockAwardWearable).toHaveBeenCalledWith('user-1', '2026-10-13', 'fitbit', activities, { overrides: [] });
+  });
+
+  it('POST sync keeps an existing Warrior Skills entry but still awards XP', async () => {
+    mockFitbit.isConfigured.mockReturnValue(true);
+    mockFitbit.getActivities.mockResolvedValue({
+      steps: 10, activeMinutes: 0, caloriesOut: 1800,
+      activities: [{ name: 'Sport', durationMin: 45, calories: 459, startTime: '18:03' }],
+    });
+    mockGetQuests.mockResolvedValue([
+      { class_name: 'Paladin of God', quest_label: 'Warrior Skills', content: 'Sambo class' },
+    ]);
+
+    const res = await request(app()).post('/api/fitbit/activities/sync?date=2026-10-13');
+
+    expect(res.status).toBe(200);
+    expect(res.body.questWritten).toBe(false);
+    expect(mockUpsertQuest).not.toHaveBeenCalled();
+    expect(mockAwardWearable).toHaveBeenCalledWith('user-1', '2026-10-13', 'fitbit', expect.any(Array), { overrides: [] });
+  });
+
+  it('POST sync rejects a malformed date before any fetch', async () => {
+    const res = await request(app()).post('/api/fitbit/activities/sync').send({ date: '10/13/2026' });
+    expect(res.status).toBe(400);
+    expect(mockFitbit.getActivities).not.toHaveBeenCalled();
+    expect(mockAwardWearable).not.toHaveBeenCalled();
+    expect(mockLoadToggl).not.toHaveBeenCalled();
+  });
+
+  it('POST sync rejects a calendar date that does not exist', async () => {
+    const res = await request(app()).post('/api/fitbit/activities/sync').send({ date: '2026-02-31' });
+    expect(res.status).toBe(400);
+    expect(mockFitbit.getActivities).not.toHaveBeenCalled();
+    expect(mockAwardWearable).not.toHaveBeenCalled();
+  });
+
+  it('POST sync defaults an omitted date to America/Chicago today', async () => {
+    mockFitbit.isConfigured.mockReturnValue(true);
+    mockFitbit.getActivities.mockResolvedValue({
+      steps: 0, activeMinutes: 0, caloriesOut: 0, activities: [],
+    });
+    const chicagoToday = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(new Date());
+
+    const res = await request(app()).post('/api/fitbit/activities/sync').send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.date).toBe(chicagoToday);
+    expect(mockAwardWearable).toHaveBeenCalledWith('user-1', chicagoToday, 'fitbit', [], { overrides: [] });
+  });
+
+  it('POST sync rejects an override activity type outside the engine workout rates before any fetch', async () => {
+    mockFitbit.isConfigured.mockReturnValue(true);
+    const res = await request(app()).post('/api/fitbit/activities/sync').send({
+      date: '2026-10-13',
+      overrides: [{ sourceId: '111', activityType: 'workout-sambo' }],
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toMatch(/workout-cardio/);
+    expect(mockFitbit.getActivities).not.toHaveBeenCalled();
+    expect(mockGoogle.getActivities).not.toHaveBeenCalled();
+    expect(mockAwardWearable).not.toHaveBeenCalled();
+    expect(mockLoadToggl).not.toHaveBeenCalled();
+  });
+
+  it('POST sync applies an override label in the quest and passes the parsed overrides to the awarder', async () => {
+    mockFitbit.isConfigured.mockReturnValue(true);
+    const activities = [
+      { name: 'Sport', durationMin: 45, calories: 459, startTime: '18:03', sourceId: '111', logType: 'tracker' },
+      { name: 'Walk', durationMin: 12, calories: 40, startTime: '07:10', logType: 'auto_detected' },
+    ];
+    mockFitbit.getActivities.mockResolvedValue({
+      steps: 4000, activeMinutes: 50, caloriesOut: 2000, activities,
+    });
+
+    const res = await request(app()).post('/api/fitbit/activities/sync').send({
+      date: '2026-10-13',
+      overrides: [{ sourceId: '111', activityType: 'workout-mma', label: 'Toggl: Sambo' }],
+    });
+
+    expect(res.status).toBe(200);
+    const quest = mockUpsertQuest.mock.calls[0][4] as string;
+    expect(quest).toContain('Sport (Toggl: Sambo) 45min');
+    expect(quest).toContain('Walk 12min');
+    expect(mockAwardWearable).toHaveBeenCalledWith(
+      'user-1',
+      '2026-10-13',
+      'fitbit',
+      activities,
+      {
+        overrides: [{
+          sourceId: '111',
+          startTime: undefined,
+          activityType: 'workout-mma',
+          label: 'Toggl: Sambo',
+        }],
+      },
+    );
+    expect(mockLoadToggl).toHaveBeenCalledWith('2026-10-13', activities, [{
+      sourceId: '111',
+      startTime: undefined,
+      activityType: 'workout-mma',
+      label: 'Toggl: Sambo',
+    }]);
+  });
+
+  it('POST sync appends a Toggl Sport type without replacing an explicit override', async () => {
+    mockFitbit.isConfigured.mockReturnValue(true);
+    const activities = [
+      { name: 'Sport', durationMin: 45, calories: 459, startTime: '18:03', sourceId: '111' },
+      { name: 'Sport', durationMin: 30, calories: 200, startTime: '12:00', sourceId: '222' },
+    ];
+    mockFitbit.getActivities.mockResolvedValue({
+      steps: 1, activeMinutes: 1, caloriesOut: 1, activities,
+    });
+    mockLoadToggl.mockResolvedValue([
+      { sourceId: '222', startTime: '12:00', activityType: 'workout-mma', label: 'Toggl: Sambo' },
+    ]);
+
+    const res = await request(app()).post('/api/fitbit/activities/sync').send({
+      date: '2026-10-13',
+      overrides: [{ sourceId: '111', activityType: 'workout-strength', label: 'Toggl: Lift' }],
+    });
+
+    expect(res.status).toBe(200);
+    const quest = mockUpsertQuest.mock.calls[0][4] as string;
+    expect(quest).toContain('Sport (Toggl: Lift) 45min');
+    expect(quest).toContain('Sport (Toggl: Sambo) 30min');
+    expect(mockAwardWearable).toHaveBeenCalledWith('user-1', '2026-10-13', 'fitbit', activities, {
+      overrides: [
+        { sourceId: '111', startTime: undefined, activityType: 'workout-strength', label: 'Toggl: Lift' },
+        { sourceId: '222', startTime: '12:00', activityType: 'workout-mma', label: 'Toggl: Sambo' },
+      ],
+    });
+  });
+
+  it('POST sync still awards cardio when Toggl typing throws', async () => {
+    mockFitbit.isConfigured.mockReturnValue(true);
+    const activities = [
+      { name: 'Sport', durationMin: 45, calories: 459, startTime: '18:03', sourceId: '111' },
+    ];
+    mockFitbit.getActivities.mockResolvedValue({
+      steps: 1, activeMinutes: 1, caloriesOut: 1, activities,
+    });
+    mockLoadToggl.mockRejectedValue(new Error('socket hang up'));
+
+    const res = await request(app()).post('/api/fitbit/activities/sync').send({ date: '2026-10-13' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(mockAwardWearable).toHaveBeenCalledWith(
+      'user-1',
+      '2026-10-13',
+      'fitbit',
+      activities,
+      { overrides: [] },
     );
   });
 

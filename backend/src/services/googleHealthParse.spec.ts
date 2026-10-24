@@ -101,6 +101,7 @@ describe('google health parsers', () => {
         },
       }],
       exercisePoints: [{
+        name: 'users/me/dataPoints/running-1',
         exercise: {
           exerciseType: 'RUNNING',
           displayName: 'Running',
@@ -139,6 +140,7 @@ describe('google health parsers', () => {
         steps: 6100,
         distanceKm: 5.4,
         startTime: '08:00',
+        sourceId: 'users/me/dataPoints/running-1',
       },
     ]);
   });

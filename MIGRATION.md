@@ -102,8 +102,13 @@ Set these in local `.env` and in Railway. Do not commit values.
 | `FITBIT_CLIENT_ID` | Only for the legacy fallback | Existing Fitbit Web API app |
 | `FITBIT_CLIENT_SECRET` | Only for the legacy fallback | Existing Fitbit Web API app |
 | `FITBIT_REDIRECT_URI` | Only for the legacy fallback | `http://localhost:3000/api/fitbit/callback` |
+| `TOGGL_API_TOKEN` | No | Toggl Track API token. The owner adds this on Railway. If unset, Fitbit "Sport" stays `workout-cardio`. Do not commit the token. |
 
 `auto` is safe before the Google client exists and before 30 October 2026 UTC: if `GOOGLE_HEALTH_CLIENT_ID` / `GOOGLE_HEALTH_CLIENT_SECRET` are empty, or the user has not connected Google Health, the app keeps calling the legacy Fitbit API. On and after that UTC date, `auto` and `legacy` stop calling it. See the owner checklist.
+
+### Toggl Track
+
+`TOGGL_API_TOKEN` must be added on Railway by the owner (Toggl Track → Profile → API token). The backend uses it as HTTP Basic auth against `https://api.track.toggl.com/api/v9/me/time_entries` to type a Fitbit "Sport" session from the overlapping time entry's project name or tag. Copy the same value into local `backend/.env` for development. Do not commit it. If the variable is unset, the integration is disabled, Sport sessions keep the `workout-cardio` rate, and everything else works as before.
 
 ## OAuth scopes
 

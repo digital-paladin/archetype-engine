@@ -6,6 +6,19 @@ import { authMiddleware } from '../middleware/auth.middleware';
 import { caughtErrorMessage } from '../utils/caughtError';
 import { syncSleepDebtFromJournalSafe } from '../services/sleepDebt.service';
 import {
+  awardWearableActivities,
+  parseWearableOverrides,
+  wearableQuestLine,
+  WearableOverrideError,
+  WearableTypeOverride,
+  WearableXpResult,
+} from '../services/wearableActivityXp.service';
+import { loadTogglSportOverrides } from '../services/togglWearableTyping.service';
+import { redactTogglSecret } from '../services/togglTrack.service';
+import type { ActivitySummary } from '../services/fitbit.service';
+import { chicagoDay } from '../services/activityOccurredAt';
+import { isRealIsoDate } from '../services/recoveryQuests.service';
+import {
   fitbitDataSourceMode,
   legacyFitbitRetired,
   resolveDailyProvider,
@@ -259,7 +272,14 @@ router.get('/sleep/week', authMiddleware, async (req: Request, res: Response) =>
   res.json({ success: true, days, source: provider === 'google' ? 'google-health' : 'fitbit' });
 });
 
+async function fetchActivities(provider: 'google' | 'fitbit', date: string | undefined, userId: string): Promise<ActivitySummary> {
+  return provider === 'google'
+    ? googleHealth.getActivities(date ?? 'today', userId)
+    : fitbitService.getActivities(date ?? 'today', userId);
+}
+
 // GET /api/fitbit/activities/today — auto-detected physical activities + step summary (PROTECTED)
+// Read-only: no quest or XP writes. Use POST /activities/sync to record them.
 router.get('/activities/today', authMiddleware, async (req: Request, res: Response) => {
   console.log('\n[FITBIT] ═══ /activities/today ══════════════════');
   const clientDate = typeof req.query.date === 'string' ? req.query.date : undefined;
@@ -272,32 +292,8 @@ router.get('/activities/today', authMiddleware, async (req: Request, res: Respon
     throw err;
   }
   try {
-    const data = provider === 'google'
-      ? await googleHealth.getActivities(clientDate ?? 'today', userId)
-      : await fitbitService.getActivities(clientDate ?? 'today', userId);
+    const data = await fetchActivities(provider, clientDate, userId);
     console.log(`[FITBIT] ✅ Activities fetched: ${data.activities.length} logged, ${data.steps} steps`);
-
-    // Write logged workouts to Warrior quest entries (non-fatal, only if field is empty)
-    if (data.activities.length > 0) {
-      try {
-        const userId   = (req as any).userId as string;
-        const dateStr  = clientDate ?? new Date().toLocaleDateString('en-CA');
-        const db       = getDataService();
-        const rows     = await db.getQuestEntries(userId, dateStr);
-        const existing = rows.find(r => r.class_name === 'Paladin of God' && r.quest_label === 'Warrior Skills');
-        const hasContent = existing?.content && existing.content.trim() !== '[To be logged]';
-        if (!hasContent) {
-          const workoutLines = data.activities
-            .map(a => `${a.name} ${a.durationMin}min (${a.calories} cal${a.startTime ? ` @ ${a.startTime}` : ''})`)
-            .join('\n');
-          await db.upsertQuestEntry(userId, dateStr, 'Paladin of God', 'Warrior Skills', workoutLines);
-          console.log(`[FITBIT] ✅ Wrote ${data.activities.length} workout(s) to Warrior Skills quest for ${dateStr}`);
-        }
-      } catch (questErr) {
-        console.warn(`[FITBIT] Warrior quest write failed (non-fatal): ${questErr instanceof Error ? questErr.message : questErr}`);
-      }
-    }
-
     console.log('[FITBIT] ═══════════════════════════════════════\n');
     res.json({ success: true, source: provider === 'google' ? 'google-health' : 'fitbit', ...data });
   } catch (err) {
@@ -306,6 +302,108 @@ router.get('/activities/today', authMiddleware, async (req: Request, res: Respon
     console.log('[FITBIT] ═══════════════════════════════════════\n');
     return sendFetchError(res, err);
   }
+});
+
+function syncDate(req: Request): string | null {
+  const raw = typeof req.body?.date === 'string' ? req.body.date
+    : typeof req.query.date === 'string' ? req.query.date : undefined;
+  if (raw === undefined) return chicagoDay(new Date());
+  const trimmed = raw.trim();
+  if (trimmed === '') return chicagoDay(new Date());
+  return isRealIsoDate(trimmed) ? trimmed : null;
+}
+
+// POST /api/fitbit/activities/sync — fetch the day's wearable workouts, fill an empty
+// Warrior Skills quest field, and award Warrior XP once per session (PROTECTED).
+// Body: { date?: 'YYYY-MM-DD', overrides?: WearableTypeOverride[] }.
+// `date` defaults to America/Chicago today (a past date is the back-pay path).
+// The dashboard only calls this for today; older dates stay on the read-only GET
+// until the owner asks. Explicit overrides type a session (Fitbit "Sport" → Sambo).
+// When a Sport session has no explicit override, Toggl Track may supply one from
+// the time entry with the greatest overlap. A missing token, an unreachable
+// Toggl, or an unmapped entry leaves that session on workout-cardio. Neither
+// path re-types a session that was already awarded.
+router.post('/activities/sync', authMiddleware, async (req: Request, res: Response) => {
+  console.log('\n[FITBIT] ═══ /activities/sync ═══════════════════');
+  const dateStr = syncDate(req);
+  if (dateStr === null) {
+    return res.status(400).json({ success: false, error: 'date must be YYYY-MM-DD' });
+  }
+  let overrides: WearableTypeOverride[];
+  try {
+    overrides = parseWearableOverrides(req.body?.overrides);
+  } catch (err) {
+    if (err instanceof WearableOverrideError) {
+      return res.status(400).json({ success: false, error: err.message });
+    }
+    throw err;
+  }
+  const userId = (req as any).userId as string;
+  let provider: 'google' | 'fitbit';
+  try {
+    provider = await dailyProvider(userId);
+  } catch (err) {
+    if (err instanceof WearableSourceError) return sendSourceError(res, err);
+    throw err;
+  }
+  let data: ActivitySummary;
+  try {
+    data = await fetchActivities(provider, dateStr, userId);
+  } catch (err) {
+    const msg = caughtErrorMessage(err);
+    console.error(`[FITBIT] ❌ Activities fetch failed: ${msg}`);
+    return sendFetchError(res, err);
+  }
+
+  // Explicit request overrides stay first so they win over a Toggl suggestion.
+  let effectiveOverrides = overrides;
+  try {
+    const fromToggl = await loadTogglSportOverrides(dateStr, data.activities, overrides);
+    effectiveOverrides = [...overrides, ...fromToggl];
+  } catch (err) {
+    console.warn(`[TOGGL] Sport typing skipped; sessions stay workout-cardio: ${redactTogglSecret(caughtErrorMessage(err))}`);
+  }
+
+  let questWritten = false;
+  if (data.activities.length > 0) {
+    try {
+      const db       = getDataService();
+      const rows     = await db.getQuestEntries(userId, dateStr);
+      const existing = rows.find(r => r.class_name === 'Paladin of God' && r.quest_label === 'Warrior Skills');
+      const hasContent = existing?.content && existing.content.trim() !== '[To be logged]';
+      if (!hasContent) {
+        // Every fetched session, including auto-detected walks that earn no XP.
+        // An override label is shown here ("Sport (Toggl: Sambo)") and in the log notes.
+        const workoutLines = data.activities
+          .map(a => wearableQuestLine(a, effectiveOverrides))
+          .join('\n');
+        await db.upsertQuestEntry(userId, dateStr, 'Paladin of God', 'Warrior Skills', workoutLines);
+        questWritten = true;
+        console.log(`[FITBIT] ✅ Wrote ${data.activities.length} workout(s) to Warrior Skills quest for ${dateStr}`);
+      }
+    } catch (questErr) {
+      console.warn(`[FITBIT] Warrior quest write failed (non-fatal): ${questErr instanceof Error ? questErr.message : questErr}`);
+    }
+  }
+
+  let xp: WearableXpResult;
+  try {
+    xp = await awardWearableActivities(userId, dateStr, provider, data.activities, { overrides: effectiveOverrides });
+  } catch (xpErr) {
+    const msg = caughtErrorMessage(xpErr);
+    console.error(`[FITBIT] ❌ Wearable XP award failed: ${msg}`);
+    return res.status(500).json({ success: false, error: `XP award failed: ${msg}`, questWritten });
+  }
+
+  console.log('[FITBIT] ═══════════════════════════════════════\n');
+  res.json({
+    success: true,
+    source: provider === 'google' ? 'google-health' : 'fitbit',
+    date: dateStr,
+    ...data,
+    questWritten,
+    xp,
+  });
 });
 
 // GET /api/fitbit/nutrition/today — food log entries + daily macro totals (PROTECTED)

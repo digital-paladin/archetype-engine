@@ -574,23 +574,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
       error: (err: any) => { console.error('[Dashboard] Recent gains fetch error:', err); }
     });
 
-    this.http.get<any>(`${environment.apiUrl}/api/character/stats`).subscribe({
-      next: (data: any) => {
-        if (data?.overallLevelInfo) this.overallLevelInfo.set(data.overallLevelInfo);
-        if (Array.isArray(data?.skillTrees) && data.skillTrees.length > 0) {
-          this.dbSkillTrees.set(data.skillTrees.map((t: any) => ({
-            id:            t.id,
-            name:          t.name,
-            level:         t.level,
-            currentXP:     t.currentXP,
-            xpToNextLevel: t.xpToNextLevel,
-            percentToNext: t.percentToNext,
-            totalCareerXP: t.totalCareerXP,
-          })));
-        }
-      },
-      error: () => {}
-    });
+    this.loadCharacterStats();
 
     const todayStr = new Date().toLocaleDateString('en-CA');
     this.http.get<any[]>(`${environment.apiUrl}/api/quests/today?date=${todayStr}`).subscribe({
@@ -673,19 +657,9 @@ export class DashboardComponent implements OnInit, OnDestroy {
       error: () => { /* Non-fatal */ }
     });
 
-    // Activities — today
-    this.http.get<{ success: boolean } & ActivitySummary>(
-      `${environment.apiUrl}/api/fitbit/activities/today?date=${localDate}`
-    ).subscribe({
-      next: (res) => {
-        if (res.success) {
-          this.activitiesData.set({ steps: res.steps, activeMinutes: res.activeMinutes, caloriesOut: res.caloriesOut, activities: res.activities });
-          if (res.restingHR) this.restingHR.set(res.restingHR);
-          console.log(`[Dashboard] Fitbit activities: ${res.activities.length} logged, ${res.steps} steps${res.restingHR ? ', HR=' + res.restingHR : ''}`);
-        }
-      },
-      error: () => { /* Non-fatal */ }
-    });
+    // Activities — today. POST sync records Warrior Skills + Warrior XP.
+    // GET /activities/today is read-only and is used for every other day.
+    this.loadActivities(localDate, true);
 
     // Vitals — weight, SpO2, VO2 max, respiratory rate
     this.http.get<{ success: boolean } & VitalsData>(
@@ -807,16 +781,69 @@ export class DashboardComponent implements OnInit, OnDestroy {
       error: () => { /* Non-fatal */ }
     });
 
+    // Today records XP. Any other day is a read, so browsing history does not back-pay.
+    this.loadActivities(date);
+  }
+
+  /**
+   * Today's wearable sessions go through POST /activities/sync (quest text + Warrior XP,
+   * once per session). Every other date uses the read-only GET so opening Sep 22, Sep 29,
+   * or the October training days does not award XP until that sync is requested on purpose.
+   */
+  private loadActivities(date: string, log = false): void {
+    const today = new Date().toLocaleDateString('en-CA');
+    const apply = (res: { success: boolean; xp?: { totalXp?: number } } & ActivitySummary) => {
+      if (!res.success) return;
+      this.activitiesData.set({
+        steps: res.steps,
+        activeMinutes: res.activeMinutes,
+        caloriesOut: res.caloriesOut,
+        activities: res.activities,
+      });
+      if (res.restingHR) this.restingHR.set(res.restingHR);
+      if (log) {
+        console.log(`[Dashboard] Fitbit activities: ${res.activities.length} logged, ${res.steps} steps${res.restingHR ? ', HR=' + res.restingHR : ''}`);
+      }
+      if ((res.xp?.totalXp ?? 0) > 0) this.refreshWarriorProgress();
+    };
+    if (date === today) {
+      this.http.post<{ success: boolean; xp?: { totalXp?: number } } & ActivitySummary>(
+        `${environment.apiUrl}/api/fitbit/activities/sync`,
+        { date },
+      ).subscribe({ next: apply, error: () => { /* Non-fatal */ } });
+      return;
+    }
     this.http.get<{ success: boolean } & ActivitySummary>(
-      `${environment.apiUrl}/api/fitbit/activities/today?date=${date}`
-    ).subscribe({
-      next: (res) => {
-        if (res.success) {
-          this.activitiesData.set({ steps: res.steps, activeMinutes: res.activeMinutes, caloriesOut: res.caloriesOut, activities: res.activities });
-          if (res.restingHR) this.restingHR.set(res.restingHR);
+      `${environment.apiUrl}/api/fitbit/activities/today?date=${date}`,
+    ).subscribe({ next: apply, error: () => { /* Non-fatal */ } });
+  }
+
+  private loadCharacterStats(): void {
+    this.http.get<any>(`${environment.apiUrl}/api/character/stats`).subscribe({
+      next: (data: any) => {
+        if (data?.overallLevelInfo) this.overallLevelInfo.set(data.overallLevelInfo);
+        if (Array.isArray(data?.skillTrees) && data.skillTrees.length > 0) {
+          this.dbSkillTrees.set(data.skillTrees.map((t: any) => ({
+            id:            t.id,
+            name:          t.name,
+            level:         t.level,
+            currentXP:     t.currentXP,
+            xpToNextLevel: t.xpToNextLevel,
+            percentToNext: t.percentToNext,
+            totalCareerXP: t.totalCareerXP,
+          })));
         }
       },
-      error: () => { /* Non-fatal */ }
+      error: () => {}
+    });
+  }
+
+  /** Character sheet + projections after a wearable sync actually credited XP. */
+  private refreshWarriorProgress(): void {
+    this.loadCharacterStats();
+    this.xpProjectionService.getProjections().subscribe({
+      next: (data: any) => { this.xpProjection.set(data); },
+      error: (err: any) => { console.error('[Dashboard] Projections refresh error:', err); },
     });
   }
 
