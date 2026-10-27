@@ -12,6 +12,20 @@ import {
 import { persistClassXpAwards, toCanonicalClassName } from '../services/xpAward.service';
 import { emitToUser } from '../realtime/userEmit';
 import { ActivityWhenError, resolveActivityWhen } from '../services/activityOccurredAt';
+import {
+  CASUAL_SOCIAL_LOG_CLASS,
+  CASUAL_SOCIAL_WEEKLY_CAP,
+  CASUAL_SOCIAL_XP,
+  isSocialActivityType,
+} from '../config/socialXp.config';
+import {
+  evaluateSocialXp,
+  gatherSocialContext,
+  readDurationMinutes,
+  renderSocialNotes,
+  resolveSocialInterval,
+  type SocialXpEvaluation,
+} from '../services/socialXp.service';
 
 /**
  * Recent activity_log window used to see training logged on a claimed day.
@@ -87,30 +101,78 @@ router.post('/', async (req: Request, res: Response) => {
       notes = userNotes ? `${CLAIM_DATE_TAG(claimDate)} ${userNotes}` : CLAIM_DATE_TAG(claimDate);
     }
 
-    // Compute per-class XP breakdown (multi-class activities award XP to several classes).
-    const xpAwards = xpCalculator.getMultiClassXP(activityType, duration);
-    const totalServerXp = xpAwards.reduce((s, a) => s + a.xp, 0);
+    // Resolve the instant before XP so a social event can be checked against
+    // recorded work and training blocks. A bad date is a 400 and does not
+    // touch the log. See activityOccurredAt.ts for the 90-day / 15-minute rules.
+    const { date, occurredAt, startTime, endTime } = req.body;
+    let when;
+    try {
+      when = resolveActivityWhen({ occurredAt, startTime, date, clientDate });
+    } catch (whenErr) {
+      if (whenErr instanceof ActivityWhenError) {
+        return res.status(400).json({ error: whenErr.message });
+      }
+      throw whenErr;
+    }
 
-    // Use client-supplied XP when provided (frontend has the authoritative calculation);
-    // fall back to server-side estimate for legacy/manual calls. Recovery quests
-    // always use the server's flat values so they can't be inflated client-side.
-    const rawXp = (!isRecovery && typeof clientXp === 'number' && clientXp > 0)
-      ? Math.round(clientXp)
-      : totalServerXp;
-    const category = xpCalculator.getCategoryFromActivity(activityType);
+    // Social XP is server-decided (goal, reflection, weekly cap, overlap).
+    // A client xp value cannot raise it. Other activities keep the client
+    // override used by crafting recipes.
+    const isSocial = isSocialActivityType(activityType);
+    let socialEvaluation: SocialXpEvaluation | null = null;
+    let scheduleWarning: string | undefined;
+    let xpAwards: Array<{ class: string; xp: number }>;
+    let rawXp: number;
+    let category: string;
 
-    // For single-class activities, if the client's authoritative XP differs from
-    // the server's flat config-based estimate (e.g. crafting recipes send a
-    // per-recipe xpReward that the activityXP config entry doesn't know about —
-    // confirmed cause of Survivalist "wilderness-craft" always persisting a flat
-    // 20 XP to character_stats regardless of what the UI displayed/logged), use
-    // the reconciled `rawXp` as that one award's baseline too, before any
-    // body-status penalty below. Multi-class activities keep the server's
-    // per-class breakdown since redistributing an arbitrary clientXp across
-    // several classes isn't well-defined.
-    const reconciledXpAwards = (xpAwards.length === 1 && rawXp !== totalServerXp)
-      ? [{ class: xpAwards[0].class, xp: rawXp }]
-      : xpAwards;
+    if (isSocial) {
+      const context = await gatherSocialContext({
+        userId,
+        occurredAtIso: when.occurredAt,
+      });
+      scheduleWarning = context.scheduleWarning;
+      const interval = resolveSocialInterval(
+        when.occurredAt,
+        readDurationMinutes(duration),
+        typeof endTime === 'string' ? endTime : null,
+      );
+      socialEvaluation = evaluateSocialXp({
+        activityType,
+        ...interval,
+        skillGoals: req.body.skillGoals ?? req.body.skillGoal,
+        reflection: req.body.reflection,
+        scheduleBlocks: context.blocks,
+        casualXpAwardedThisWeek: context.casualXpAwardedThisWeek,
+      });
+      xpAwards = socialEvaluation.awards.map(award => ({ class: award.className, xp: award.xp }));
+      rawXp = socialEvaluation.totalXp;
+      category = socialEvaluation.awards[0]?.className ?? CASUAL_SOCIAL_LOG_CLASS;
+    } else {
+      // Compute per-class XP breakdown (multi-class activities award XP to several classes).
+      const serverAwards = xpCalculator.getMultiClassXP(activityType, duration);
+      const totalServerXp = serverAwards.reduce((s, a) => s + a.xp, 0);
+
+      // Use client-supplied XP when provided (frontend has the authoritative calculation);
+      // fall back to server-side estimate for legacy/manual calls. Recovery quests
+      // always use the server's flat values so they can't be inflated client-side.
+      rawXp = (!isRecovery && typeof clientXp === 'number' && clientXp > 0)
+        ? Math.round(clientXp)
+        : totalServerXp;
+      category = xpCalculator.getCategoryFromActivity(activityType);
+
+      // For single-class activities, if the client's authoritative XP differs from
+      // the server's flat config-based estimate (e.g. crafting recipes send a
+      // per-recipe xpReward that the activityXP config entry doesn't know about —
+      // confirmed cause of Survivalist "wilderness-craft" always persisting a flat
+      // 20 XP to character_stats regardless of what the UI displayed/logged), use
+      // the reconciled `rawXp` as that one award's baseline too, before any
+      // body-status penalty below. Multi-class activities keep the server's
+      // per-class breakdown since redistributing an arbitrary clientXp across
+      // several classes isn't well-defined.
+      xpAwards = (serverAwards.length === 1 && rawXp !== totalServerXp)
+        ? [{ class: serverAwards[0].class, xp: rawXp }]
+        : serverAwards;
+    }
 
     // ── Body-status XP penalty (previously dead code — BodyStatusService.getXPPenaltyForAction()
     // was unit-tested but never wired into a real activity-logging path). Take the max active
@@ -135,24 +197,19 @@ router.post('/', async (req: Request, res: Response) => {
     // Same multiplier applied on top of the client/server reconciliation above, so the
     // response and the per-class Supabase writes below (character_stats) both stay
     // reconciled with the top-level `xp` the client sees.
-    const finalXpAwards = reconciledXpAwards.map(a => ({ ...a, xp: Math.round(a.xp * penaltyMultiplier) }));
+    const finalXpAwards = xpAwards.map(a => ({ ...a, xp: Math.round(a.xp * penaltyMultiplier) }));
     if (xpPenaltyPct > 0) {
       console.log(`[ACTIVITY] Body-status XP penalty applied: -${xpPenaltyPct}% (${rawXp} → ${xp})`);
     }
 
-    // Occurred time is resolved after XP math and before any write. A bad
-    // date is a 400 and does not touch the log. Today (UTC or Chicago) and
-    // an omitted date stay on the request clock; a past day is stored on
-    // that day. See activityOccurredAt.ts for the 90-day / 15-minute rules.
-    const { date, occurredAt, startTime } = req.body;
-    let when;
-    try {
-      when = resolveActivityWhen({ occurredAt, startTime, date, clientDate });
-    } catch (whenErr) {
-      if (whenErr instanceof ActivityWhenError) {
-        return res.status(400).json({ error: whenErr.message });
-      }
-      throw whenErr;
+    if (isSocial && socialEvaluation) {
+      notes = renderSocialNotes({
+        reflection: req.body.reflection,
+        userNotes: rawNotes,
+        mode: socialEvaluation.mode,
+        awardedXp: xp,
+        flags: socialEvaluation.flags,
+      });
     }
 
     // ── Courage XP calculation (session bonus + optional flag) ──────────────
@@ -219,6 +276,13 @@ router.post('/', async (req: Request, res: Response) => {
       });
     }
 
+    const overlapKinds = socialEvaluation
+      ? [...new Set(socialEvaluation.flags.map(flag => flag.kind))]
+      : [];
+    const message = overlapKinds.length > 0
+      ? `Social event overlaps a ${overlapKinds.join(' and ')} block. +0 XP`
+      : `Activity logged successfully! +${xp} XP`;
+
     // Return success response
     res.json({
       success: true,
@@ -230,9 +294,20 @@ router.post('/', async (req: Request, res: Response) => {
       date: when.date,
       occurredAt: when.occurredAt,
       loggedAt: when.loggedAt,
-      message: `Activity logged successfully! +${xp} XP`,
+      message,
       ...(xpPenaltyPct > 0 && { xpPenaltyPct }),
       ...(courageXPAwarded > 0 && { courageXPAwarded, courageMessage: `+${courageXPAwarded} Courage XP earned!` }),
+      ...(socialEvaluation && {
+        social: {
+          mode: socialEvaluation.mode,
+          awards: finalXpAwards,
+          flags: socialEvaluation.flags,
+          reasons: socialEvaluation.reasons,
+          casualXp: socialEvaluation.mode === 'casual' ? xp : 0,
+          weeklyCap: CASUAL_SOCIAL_WEEKLY_CAP,
+          ...(scheduleWarning && { scheduleWarning }),
+        },
+      }),
     });
 
   } catch (error) {
@@ -326,6 +401,17 @@ router.get('/calculate-xp', (req: Request, res: Response) => {
     if (!activityType) {
       return res.status(400).json({ 
         error: 'activityType query parameter is required' 
+      });
+    }
+
+    if (isSocialActivityType(activityType)) {
+      return res.json({
+        activityType,
+        category: 'social',
+        xp: CASUAL_SOCIAL_XP,
+        duration: duration || 0,
+        weeklyCap: CASUAL_SOCIAL_WEEKLY_CAP,
+        note: 'Preview is the casual flat award. Skill XP is decided when the log includes a skill goal and a reflection.',
       });
     }
 

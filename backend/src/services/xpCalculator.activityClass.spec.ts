@@ -38,6 +38,11 @@ describe('XpCalculatorService activity class routing', () => {
 
     expect(classOf('financial-study')).toBe('Financial Strategist');
     expect(classOf('wilderness-training')).toBe('Survivalist');
+
+    expect(classOf('social')).toBe('Social');
+    expect(classOf('social-networking')).toBe('Social');
+    expect(calc.calculateXP('social', 60)).toBe(0);
+    expect(calc.calculateXP('social-networking', 30)).toBe(0);
   });
 
   it('files the old frontend keys as Sage', () => {
