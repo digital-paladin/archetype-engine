@@ -91,6 +91,7 @@ This system occupies the gap: *you define the archetype, the system holds you ac
 - **Fitbit Web API** — legacy fallback until `FITBIT_DATA_SOURCE=google` (see MIGRATION.md)
 - **Todoist** — AI agent task creation and management
 - **GitHub sync** — journal and character sheet backup via GitHub API
+- **Grok Bot (System)** — service credential on `/api/system/*` (quests, messages, consumption). A draft event contract for finance, Toggl, calendar, and Todoist facts is in [docs/SYSTEM-QUESTS.md](docs/SYSTEM-QUESTS.md). This repo does not integrate Plaid and does not store Plaid tokens or raw financial data.
 
 ---
 

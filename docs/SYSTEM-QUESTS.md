@@ -4,6 +4,8 @@ The System window is the player-facing half of a Solo Leveling style quest chann
 
 Player sessions (login token or the personal API key from `GET /api/auth/api-key`) can call every endpoint. A service credential can call **only** `/api/system/*`, and it still cannot mint credentials or approve money rewards.
 
+A draft roadmap for a Grok Bot event-ingestion contract is at the end of this file ([Grok Bot System bridge](#roadmap-grok-bot-system-bridge-draft)). It is not implemented. The routes in the tables below are the live System API.
+
 ## What Paul runs once
 
 No new Railway environment variables. The API uses the Supabase keys already set on the backend (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY`).
@@ -231,3 +233,183 @@ Connect Socket.IO to the backend origin with `auth: { token: "<login access toke
 `type` is `issued`, `progress`, `cleared`, `failed`, `expired`, `revealed`, `message`, or `edited`. The window pops a notice for everything except `progress`, and the nav badge counts active quests (including sealed ones). Anonymous sockets are not in a user room and do not receive these events.
 
 Activity and consume log events are also sent to `user:<id>` rather than every connected client. The local character-sheet file watcher still broadcasts `character:updated` in dev, because that feed is not tied to a user id.
+
+## Roadmap: Grok Bot System bridge (draft)
+
+**Status:** Draft. Documentation only. Nothing in this section is implemented. It adds no route, migration, environment variable, or client.
+
+**Phase:** Unnumbered. This repository has no roadmap file and no single phase sequence to continue. `backend/src/services/classTemplates.ts` mentions a file named `GAMIFICATION-UI-PUBLIC-ROADMAP` at Phase 3.2; that file is not in the tree. Other "Phase N" labels belong to one feature each (the Supabase migration, wearables, abstinence streaks, disciplined indulgence, OpenClaw). Which number this item should use, if any, is an open question.
+
+### Goal
+
+A documented, stable contract so Grok Bot can submit events and archetype-engine can award XP from those events without archetype-engine talking to Plaid, Toggl, Google Calendar, or Todoist for this bridge.
+
+Grok Bot is the integration layer. It already acts as the System: it holds a service credential and calls `/api/system/*`. It already has read access to Plaid-linked finances, Toggl, Google Calendar, and Todoist. Those reads stay in Grok Bot. This repo does not grow a second copy of them.
+
+### What exists today
+
+There is no System event endpoint. A service credential that calls anything outside `/api/system` receives `403` `service_key_scope` (`isServicePathAllowed` in `backend/src/middleware/auth.middleware.ts`). `POST /api/activities` is one of those rejected paths, so the bot cannot log an activity with the System key.
+
+The live authenticated System surface, all under `/api/system`, is:
+
+| Method | Path | Relevant behavior |
+|---|---|---|
+| `POST` | `/api/system/quests` | Create. `201` the first time. `200` and `idempotentReplay: true` when the same `idempotencyKey` repeats. The second body is ignored. |
+| `POST` | `/api/system/quests/:id/clear` | Pays the stored `xpReward` once. A clear body cannot change the XP. |
+| `PATCH` | `/api/system/quests/:id` | Corrects an active quest. `idempotencyKey` is required. A replay does not post a second audit message. |
+| `POST` | `/api/system/messages` | Stores a message. Same idempotency replay as create. |
+| `GET` | `/api/system/messages` | The audit trail for quest corrections. |
+| `POST` | `/api/system/consumption` | Requires `idempotencyKey` (1–200 characters, no newlines). |
+
+`system_quests` and `system_messages` both have `UNIQUE (user_id, idempotency_key)` (`supabase/migrations/010_system_quests.sql`). Quest and message `source` is only `grokbot`, `user`, or `system`. That enum is who wrote the row. It is not the event source tag below (`plaid/finance`, `toggl`, `calendar`, `todoist`, `manual`). Do not reuse it for that.
+
+The credential is a `sys_` token with `scopes: ["system"]`, minted from the System tab and stored by the bot as `ARCHETYPE_SYSTEM_KEY`. The raw token is shown once and is not committed. See [Generate and revoke the Grok Bot key](#generate-and-revoke-the-grok-bot-key).
+
+XP from a cleared quest is applied with `persistClassXpAwards` onto `character_stats`. That function does not append `xp_history`. `xp_history` is a table the analytics routes read; this doc does not claim the live award path writes it.
+
+Wearable workouts are a separate, already-shipped path. `backend/src/services/wearableActivityXp.service.ts` treats a wearable-logged physical activity as verified and awards Warrior XP from existing `XpCalculatorService` rates, once per dedupe tag. That path is not this contract.
+
+`POST /api/activities` still accepts a player session and can persist client-supplied XP. It does not require a verification level. The rule for **this** contract is stricter: XP is awarded only for verified work. Changing `POST /api/activities` is not part of this item.
+
+### Contract
+
+The bridge needs one authenticated ingest endpoint on the System surface, so the existing service credential can call it. No such route exists. The working name is `POST /api/system/events`. The name is not final (see open questions). Auth stays `Authorization: Bearer` with the service credential or a player session. The user id comes from the credential, not from the body, same as quests.
+
+Every accepted event has these fields:
+
+| Field | Required | Rule |
+|---|---|---|
+| `source` | yes | One of `plaid/finance`, `toggl`, `calendar`, `todoist`, `manual`. |
+| `idempotencyKey` | yes | Same limits as quests: 1–200 characters, no newlines. Unique per user. A repeat returns the original result and does not award XP again. A different body on the same key is ignored, matching quest create. |
+| `verification` | yes | `verified-by-source` or `self-reported`. Only `verified-by-source` may award XP. `self-reported` may be stored and must not award XP. |
+| `kind` | yes | One of the kinds listed for that source. Unknown kinds are rejected, not stored as a guess. |
+| `occurredOn` | yes | The civil date the fact applies to (`YYYY-MM-DD`). Which timezone defines that date is an open question. Several existing rules use `America/Chicago`. |
+
+`source: manual` is self-reported. If `verification` is `verified-by-source` on a `manual` event, reject it. A bot must not upgrade its own note into verified XP by setting the field.
+
+The event body does not choose the XP amount. Quest **clear** already works that way (the stored `xpReward` is what gets paid). Quest **create** still accepts `xpReward` from the caller. This contract follows the clear rule, not the create rule. Who computes the number, and which class receives it, is an open question. Do not add new XP constants in order to fill that gap.
+
+Illustrative only. These bodies are not an API. Field names other than `source`, `idempotencyKey`, and `verification` can still change.
+
+```json
+{
+  "idempotencyKey": "finance:2026-10-27:no-spend-day",
+  "source": "plaid/finance",
+  "verification": "verified-by-source",
+  "kind": "no-spend-day",
+  "occurredOn": "2026-10-27"
+}
+```
+
+```json
+{
+  "idempotencyKey": "calendar:2026-10-27:example-meeting",
+  "source": "calendar",
+  "verification": "verified-by-source",
+  "kind": "meeting",
+  "occurredOn": "2026-10-27",
+  "ttiWork": true
+}
+```
+
+`ttiWork` is a placeholder name. See open questions.
+
+### Audit trail
+
+Each accept, idempotent replay, and reject writes an audit record. The record includes the user id, the idempotency key, `source`, `verification`, `kind`, the outcome, and the time. If XP was awarded, it includes the class and the amount the server decided. It includes which credential was used, by credential id or prefix, never the token.
+
+It does not include secrets, Plaid tokens, raw transactions, merchant names, balances, or account numbers. A rejected finance payload is recorded as a rejection, not stored in full.
+
+The closest trail today is `system_messages` (`GET /api/system/messages`), which quest corrections already write. Credential rows also update `last_used_at`. Neither is an event audit log. Whether events append `system_messages`, a new table, or both is an open question.
+
+### Finance scope
+
+`source` is `plaid/finance`. Grok Bot reduces its own finance read to one of these facts. The engine stores the fact, not the books.
+
+| `kind` | Fact |
+|---|---|
+| `no-spend-day` | That civil day was a no-spend day. |
+| `weekly-budget-adherence` | That week met the budget. |
+| `debt-payment-made` | A debt payment was made. |
+| `savings-transfer-made` | A savings transfer was made. |
+
+A finance event is rejected, and not stored, when the body contains any of:
+
+- a raw transaction, or a list of transactions
+- a merchant name
+- a balance
+- an account number, mask, or account id
+
+Institution names, statement descriptors, and Plaid item or access tokens are the same class of data and are rejected too. Dollar amounts are omitted from the contract until the open question on amounts is answered. A payload that includes an amount is not a valid event under this draft.
+
+This repo has no Plaid client and no Plaid environment variable. Do not add one. Do not add a Plaid fixture, sample export, or token placeholder.
+
+The existing treasury (`/api/treasury`, manual entry and CSV import) stores `merchant` and `amount` on `spending_entries`. That path is player-entered. It is not this bridge, and this item does not change it. Whether those rows conflict with "never store raw financial data" is an open question.
+
+### Other sources
+
+**Toggl (`source: toggl`).** A verified session the bot already read. `kind` is `session`. The engine already calls Toggl during Fitbit Sport sync (`POST /api/fitbit/activities/sync`) when `TOGGL_API_TOKEN` is set, and uses the overlapping entry's project name or tag only to type that Sport row (`workout-mma`, `workout-strength`, `workout-mobility`, otherwise `workout-cardio`). That typing path stays as it is. A bridge event must not award XP a second time for a session the wearable sync already credited. How the two paths share a dedupe key is an open question. This item does not add Toggl calls.
+
+**Calendar (`source: calendar`).** A verified calendar event. `kind` is `meeting`. There is no Google Calendar client in this repo. Meetings pay Developer XP only when they are explicitly tagged TTI work. The tag is not inferred from the title, description, or attendees. An untagged meeting does not pay Developer XP.
+
+On `main` that gate is not enforced. `meetings-active` and `meetings-passive` are developer activity types and `frontend/src/app/activity-type-map.ts` maps both to `personal-project`. The Web App Developer quest label `Job (TTI)` (`backend/src/routes/quests.routes.ts`) is the in-repo name for that work. It is not a tag check on activities.
+
+**Todoist (`source: todoist`).** A verified completion. `kind` is `completion`. The existing Todoist routes (`/api/todoist/*`, token `TODOIST_API_TOKEN`) create and close tasks. Closing a task there does not award XP. The bridge is the path that would. The idempotency key must distinguish one completion from a later re-completion so a reopen/close cycle cannot double-pay. This item does not add Todoist calls.
+
+### Privacy and security
+
+This repository is public.
+
+- No secrets, tokens, Plaid keys, account numbers, real email addresses, street addresses, or raw financial exports in the repo, in docs, in fixtures, or in logs.
+- Refer to the bot secret only by the name `ARCHETYPE_SYSTEM_KEY`. Refer to engine tokens only by names already in `backend/.env.example` (`TOGGL_API_TOKEN`, `TODOIST_API_TOKEN`, and the Supabase key names). Do not add a Plaid variable.
+- The service credential stays a hash at rest (`service_credentials.token_hash`). The audit trail stores a prefix or id, not the secret.
+- Examples in this section use a calendar date and generic labels. Do not replace them with a real meeting title, task title, merchant, or amount.
+
+### Out of scope
+
+- A direct Plaid integration, Plaid Link, or storing Plaid tokens. Plaid production approval is not pursued from this repo.
+- Grok Bot's own clients for Plaid, Toggl, Google Calendar, and Todoist. They are not implemented here.
+- Letting the event body set an XP amount.
+- New XP rates. If a kind has no existing server rate, the amount stays an open question rather than a number invented in this doc.
+- Rewriting the manual treasury, Fitbit Sport typing, wearable XP, Todoist task routes, or `POST /api/activities`.
+- Shipping the endpoint, a migration, or tests in the pull request that adds this section.
+
+### Open questions
+
+- Which phase number, if any, this item should have. The referenced public roadmap file is not in the repo.
+- Final path: `POST /api/system/events`, or another name under `/api/system`. Extending `isServicePathAllowed` beyond `/api/system` would widen the service credential. That is not assumed.
+- Whether `plaid/finance` stays one tag (the slash is awkward in some enums) or becomes `finance`.
+- Whether `verified-by-source` and `self-reported` are the full set. Wearable workouts are already described as verified on a different path. This draft does not map them onto this field.
+- Which class each `kind` credits, and the server-side amount. Quest create lets the caller send `xpReward`. Wearable workouts use existing calculator rates. This draft picks neither, and it does not publish a number.
+- Whether a finance fact may include a numeric aggregate (a ratio, a count) that is not a balance, a merchant, or an account number. Until that is decided, amounts are invalid.
+- Timezone for `occurredOn`. `America/Chicago` is the candidate because Thursday rest, Toggl overlap, and wearable wall-clock times already use it. Not confirmed for this contract.
+- Audit store: `system_messages`, a new table, or both. Also whether an award should append `xp_history`. The current `persistClassXpAwards` path does not.
+- How a Toggl `session` event dedupes against a Fitbit Sport row already typed from Toggl and already awarded wearable XP.
+- Which Toggl fields are safe to store (duration, project name, tag) and which are not.
+- The field that marks a meeting as TTI work. `ttiWork` above is a placeholder. An unmerged draft pull request (#36) proposes `workTag: "tti"` or `tags` containing `"tti"` on `POST /api/activities`. That pull request is not on `main`, and this draft does not adopt its field.
+- Whether an untagged meeting is stored as a non-Developer event, stored with zero XP, or rejected.
+- Whether a Todoist event stores a task id only, or also a title. Titles can be personal. The id format is not specified here.
+- Whether a self-reported event is stored for the audit trail or rejected. It must not award XP either way.
+- How long audit rows are kept.
+- Whether the existing in-engine `TOGGL_API_TOKEN` Sport-typing path and `TODOIST_API_TOKEN` task API should later be retired in favor of this bridge. This item does not retire them.
+- Whether manual treasury rows (`merchant`, `amount`) should be constrained by the same raw-finance rule. This item does not migrate or delete them.
+- What "done" means for a replay that follows a reject: the quest pattern ignores the second body. A client that fixes a rejected payload must use a new idempotency key. Confirm that is the rule here too.
+
+### Acceptance criteria
+
+This section being merged does not finish the item. The item is done when all of the following are true:
+
+- [ ] The ingest route exists under `/api/system`, accepts the System service credential, and rejects a missing or revoked credential with `401`.
+- [ ] A service credential still cannot call routes outside `/api/system`.
+- [ ] `source` is required and is one of the five tags. Any other source is rejected.
+- [ ] `idempotencyKey` is required. Repeating it for the same user returns the original outcome and does not award XP again, including two concurrent requests.
+- [ ] `verification` is required. `self-reported` awards no XP. `manual` combined with `verified-by-source` is rejected.
+- [ ] The body cannot set the XP amount. The server decides the amount, or it awards nothing when the amount is still an open question.
+- [ ] An audit record is written for accept, replay, and reject. It has no token, no raw finance fields, and no PII beyond the user id the credential already implies.
+- [ ] Finance events accept only the four kinds. A body with a transaction, merchant, balance, account number, or (until decided) a money amount is rejected and the forbidden fields are not stored.
+- [ ] The repo still has no Plaid client, Plaid token, Plaid env var, or raw financial fixture.
+- [ ] A calendar meeting awards Developer XP only when explicitly tagged TTI work. An untagged meeting does not.
+- [ ] A Toggl session event does not double-count a session already awarded through wearable Sport sync. The dedupe rule is written down before the award ships.
+- [ ] A Todoist completion event does not pay twice for the same completion, including a reopen and close.
+- [ ] Keys in docs and in `.env.example` are names only. No new secret is added.
+- [ ] Tests cover idempotent replay, self-reported no-XP, rejected raw finance, and TTI versus untagged meetings.
