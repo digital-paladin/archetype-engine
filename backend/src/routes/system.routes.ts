@@ -18,6 +18,8 @@ import {
   updateQuestProgress,
 } from '../services/systemQuest.service';
 import { ConsumptionError, logConsumption } from '../services/consumption.service';
+import { getDataService } from '../services/data/dataService';
+import type { CharacterStats } from '../services/data/IDataService';
 
 const router = Router();
 
@@ -44,6 +46,21 @@ function sendError(res: Response, err: unknown): void {
     error: 'internal',
     message: err instanceof Error ? err.message : 'Unknown error',
   });
+}
+
+/** Class rows only. `character_stats` is selected with `*`, so extra columns must not leak. */
+function toStatusTree(stat: CharacterStats): {
+  className: string;
+  level: number;
+  currentXp: number;
+  totalXp: number;
+} {
+  return {
+    className: stat.class_name,
+    level: stat.level,
+    currentXp: stat.current_xp,
+    totalXp: stat.total_xp,
+  };
 }
 
 function requirePlayer(authKind: 'user' | 'service'): void {
@@ -194,6 +211,25 @@ router.get('/messages', async (req: Request, res: Response) => {
     const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) : 50;
     const messages = await listSystemMessages(userId, Number.isFinite(limit) ? limit : 50);
     res.json({ success: true, messages });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+/**
+ * GET /api/system/status
+ * Levels and XP per class for the credential's user.
+ * Reads `character_stats` only. Does not fall back to the markdown character sheet,
+ * and does not return profile, birth date, or rpg_stats (the personal API key lives there).
+ */
+router.get('/status', async (req: Request, res: Response) => {
+  try {
+    const { userId } = authOf(req);
+    const stats = await getDataService().getCharacterStats(userId);
+    const trees = stats
+      .map(toStatusTree)
+      .sort((a, b) => a.className.localeCompare(b.className));
+    res.json({ success: true, trees });
   } catch (err) {
     sendError(res, err);
   }

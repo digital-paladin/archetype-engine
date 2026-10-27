@@ -74,9 +74,12 @@ Base URL is the backend origin. Send `Authorization: Bearer <token>` on every ca
 | `POST` | `/api/system/quests/:id/reward-approval` | **player only** | `{ decision: "approved" \| "declined" }` for a money suggestion. |
 | `POST` | `/api/system/messages` | player or service | `{ body, idempotencyKey?, questId? }` |
 | `GET` | `/api/system/messages` | player or service | Latest messages. |
+| `GET` | `/api/system/status` | player or service | Levels and XP per class from `character_stats`. No profile, birth date, or personal API key. |
 | `POST` | `/api/system/credentials` | **player only** | Mint a service key. |
 | `GET` | `/api/system/credentials` | **player only** | List keys (no secret). |
 | `DELETE` | `/api/system/credentials/:id` | **player only** | Revoke. |
+
+`GET /api/system/status` returns one row per `character_stats` class for the credential's user: `className`, `level`, `currentXp`, `totalXp`, sorted by class name. It does not read the markdown character sheet. It does not return the profile, birth date, or `rpg_stats` (the personal API key is stored there). An empty `trees` array means that user has no class rows yet. The stdio server in [`mcp/archetype-system`](../mcp/archetype-system/README.md) calls this route with the System key.
 
 Deadlines in the past expire during create, list, read, and the minute cron. Expiry uses the penalty, not the clear reward. Clearing, failing, or expiring a hidden quest reveals it so the result can be shown.
 
