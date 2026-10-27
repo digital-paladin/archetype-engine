@@ -510,7 +510,7 @@ const NAV_TABS: { id: PanelId; icon: string; label: string }[] = [
 export class DashboardComponent implements OnInit, OnDestroy {
   readonly navTabs = NAV_TABS;
   activePanel = signal<PanelId>('character');
-  /** Set when a 3D-model body-status marker is clicked — passed down to app-body-diagram to pre-open that status. */
+  /** Set when a 3D-model body-status marker is clicked — the Health list highlights that status. Region taps log a new condition on the model itself. */
   preSelectedBodyStatusId = signal<string | null>(null);
 
   xpProjection        = signal<XPProjection | null>(null);
