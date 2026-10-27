@@ -791,3 +791,63 @@ describe('PATCH /api/system/quests/:id — corrections', () => {
     expect(kind.body.message).toMatch(/kind/);
   });
 });
+
+describe('GET /api/system/status', () => {
+  it('returns level and XP per class and drops every other column', async () => {
+    mockGetCharacterStats.mockResolvedValue([
+      {
+        user_id: 'user-1',
+        class_name: 'Warrior',
+        level: 4,
+        current_xp: 120,
+        total_xp: 900,
+        api_key: 'should-not-leak',
+        notes: 'private note',
+      },
+      {
+        user_id: 'user-1',
+        class_name: 'Developer',
+        level: 7,
+        current_xp: 10,
+        total_xp: 4000,
+      },
+    ]);
+
+    const res = await request(userApp()).get('/api/system/status');
+
+    expect(res.status).toBe(200);
+    expect(mockGetCharacterStats).toHaveBeenCalledWith('paul');
+    expect(res.body).toEqual({
+      success: true,
+      trees: [
+        { className: 'Developer', level: 7, currentXp: 10, totalXp: 4000 },
+        { className: 'Warrior', level: 4, currentXp: 120, totalXp: 900 },
+      ],
+    });
+    const encoded = JSON.stringify(res.body);
+    expect(encoded).not.toContain('should-not-leak');
+    expect(encoded).not.toContain('private note');
+    expect(encoded).not.toContain('user-1');
+    expect(encoded).not.toContain('api_key');
+  });
+
+  it('returns an empty list when the user has no class rows', async () => {
+    mockGetCharacterStats.mockResolvedValue([]);
+    const res = await request(userApp()).get('/api/system/status');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, trees: [] });
+  });
+
+  it('is readable with a service credential', async () => {
+    const minted = await request(userApp()).post('/api/system/credentials').send({ name: 'Grok Bot' });
+    const token = minted.body.token as string;
+    const res = await request(authedApp())
+      .get('/api/system/status')
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.trees).toEqual([
+      { className: 'Warrior', level: 2, currentXp: 100, totalXp: 500 },
+    ]);
+    expect(JSON.stringify(res.body)).not.toContain(token);
+  });
+});
