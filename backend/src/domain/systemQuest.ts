@@ -3,7 +3,8 @@
  * and hidden-quest masking. Persistence and XP live in the service layer.
  */
 
-export const QUEST_KINDS = ['daily', 'emergency', 'hidden', 'penalty'] as const;
+/** `acquisition` is a long-term goal. It does not expire, and its money fields never grant XP. */
+export const QUEST_KINDS = ['daily', 'emergency', 'hidden', 'penalty', 'acquisition'] as const;
 export type QuestKind = (typeof QUEST_KINDS)[number];
 
 export const QUEST_STATUSES = ['active', 'cleared', 'failed', 'expired'] as const;
@@ -36,6 +37,13 @@ export interface QuestObjective {
   target: number;
   progress: number;
   done: boolean;
+  /**
+   * Class XP paid once when this milestone first becomes done.
+   * Acquisition quests only. A flat reward — never derived from dollars or from `progress`.
+   */
+  xpReward?: Record<string, number>;
+  /** Set by the server when milestone XP is committed. Clients cannot send it. */
+  xpAwardedAt?: string | null;
 }
 
 export interface QuestPenalty {
@@ -91,6 +99,12 @@ export interface SystemQuestRecord {
   thursdayTrainingFlag: boolean;
   recoveryType: RecoveryType | null;
   parentQuestId: string | null;
+  /** USD cents. Acquisition bookkeeping only — never an XP input. */
+  targetCostCents: number | null;
+  /** USD cents saved so far. Updating this does not award XP. */
+  amountSavedCents: number;
+  /** inventory_items.id. Cleared acquisition quests mark that row stocked. */
+  inventoryItemId: string | null;
   resolution: QuestResolution | null;
   /** Append-only. Empty until the first correction. */
   edits: QuestEdit[];
@@ -115,6 +129,10 @@ export interface QuestDraft {
   training?: boolean;
   recoveryType?: RecoveryType;
   acknowledgeThursdayRest?: boolean;
+  /** USD cents. Acquisition only. Not XP. */
+  targetCostCents?: number | null;
+  amountSavedCents?: number;
+  inventoryItemId?: string | null;
 }
 
 export interface SystemMessageRecord {
@@ -201,7 +219,42 @@ function assertRecoveryType(value: unknown, field: string): RecoveryType {
   return value as RecoveryType;
 }
 
-function normalizeObjectives(raw: unknown): QuestObjective[] {
+const MAX_MONEY_CENTS = 100_000_000;
+
+/** Integer USD cents. Rejects anything that is not a bounded non-negative integer. */
+export function readMoneyCents(value: unknown, field: string, allowNull: boolean): number | null {
+  if (value == null || value === '') {
+    if (allowNull) return null;
+    throw new SystemQuestError('invalid_quest', `${field} is required`, 400);
+  }
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > MAX_MONEY_CENTS) {
+    throw new SystemQuestError(
+      'invalid_quest',
+      `${field} must be an integer number of USD cents from 0 to ${MAX_MONEY_CENTS}. It is not XP.`,
+      400,
+    );
+  }
+  return value;
+}
+
+function readObjectiveXp(
+  row: Record<string, unknown>,
+  index: number,
+  kind: QuestKind,
+): Record<string, number> | undefined {
+  if (!('xpReward' in row) || row.xpReward == null) return undefined;
+  if (kind !== 'acquisition') {
+    throw new SystemQuestError(
+      'invalid_quest',
+      `objectives[${index}].xpReward is only valid on acquisition quests`,
+      400,
+    );
+  }
+  const xp = assertXpMap(row.xpReward, `objectives[${index}].xpReward`, true);
+  return Object.keys(xp).length ? xp : undefined;
+}
+
+function normalizeObjectives(raw: unknown, kind: QuestKind): QuestObjective[] {
   if (!Array.isArray(raw) || raw.length === 0) {
     throw new SystemQuestError('invalid_quest', 'objectives must be a non-empty array', 400);
   }
@@ -224,6 +277,17 @@ function normalizeObjectives(raw: unknown): QuestObjective[] {
     if (typeof progress !== 'number' || !Number.isInteger(progress) || progress < 0 || progress > 1_000_000) {
       throw new SystemQuestError('invalid_quest', `objectives[${index}].progress must be a non-negative integer`, 400);
     }
+    if ('xpAwardedAt' in row) {
+      throw new SystemQuestError('invalid_quest', `objectives[${index}].xpAwardedAt is server-owned`, 400);
+    }
+    if (kind === 'acquisition' && (progress > 0 || row.done === true)) {
+      throw new SystemQuestError(
+        'invalid_quest',
+        `objectives[${index}] must start unfinished. Acquisition XP is paid when the milestone is completed.`,
+        400,
+      );
+    }
+    const xpReward = readObjectiveXp(row, index, kind);
     const id = typeof row.id === 'string' && row.id.trim() ? row.id.trim().slice(0, 80) : `obj-${index + 1}`;
     const done = row.done === true || progress >= target;
     return {
@@ -232,6 +296,7 @@ function normalizeObjectives(raw: unknown): QuestObjective[] {
       target,
       progress: Math.min(progress, target),
       done,
+      ...(xpReward ? { xpReward } : {}),
     };
   });
 }
@@ -280,7 +345,7 @@ function assertPenalty(penalty: unknown, training: boolean): QuestPenalty | null
     if (!nested.title || typeof nested.title !== 'string') {
       throw new SystemQuestError('invalid_quest', 'penalty.penaltyQuest.title is required', 400);
     }
-    normalizeObjectives(nested.objectives);
+    normalizeObjectives(nested.objectives, 'penalty');
     penaltyQuest = nested;
   }
   return { recoveryType, ...(xpPenalty && Object.keys(xpPenalty).length ? { xpPenalty } : {}), ...(penaltyQuest ? { penaltyQuest } : {}) };
@@ -303,6 +368,9 @@ export interface NormalizedQuest {
     training: boolean;
     thursdayTrainingFlag: boolean;
     recoveryType: RecoveryType | null;
+    targetCostCents: number | null;
+    amountSavedCents: number;
+    inventoryItemId: string | null;
   };
   warning: string | null;
 }
@@ -351,10 +419,18 @@ export function normalizeQuestDraft(
     throw new SystemQuestError('penalty_must_be_recovery', 'Penalty quests require a recoveryType', 422);
   }
 
-  const objectives = normalizeObjectives(body.objectives);
-  const xpReward = assertXpMap(body.xpReward, 'xpReward', kind === 'penalty');
-  if (kind !== 'penalty' && Object.keys(xpReward).length === 0) {
+  const objectives = normalizeObjectives(body.objectives, kind as QuestKind);
+  const xpReward = assertXpMap(body.xpReward, 'xpReward', kind === 'penalty' || kind === 'acquisition');
+  if (kind !== 'penalty' && kind !== 'acquisition' && Object.keys(xpReward).length === 0) {
     throw new SystemQuestError('invalid_quest', 'xpReward must include at least one class', 400);
+  }
+  const milestoneXp = objectives.some(objective => objective.xpReward && Object.keys(objective.xpReward).length > 0);
+  if (kind === 'acquisition' && !milestoneXp && Object.keys(xpReward).length === 0) {
+    throw new SystemQuestError(
+      'invalid_quest',
+      'An acquisition quest needs xpReward on at least one milestone or a completion xpReward. Dollars saved are not XP.',
+      400,
+    );
   }
 
   let deadline: string | null = null;
@@ -379,6 +455,38 @@ export function normalizeQuestDraft(
     : null;
   if (rewardCostsMoney && !rewardNote) {
     throw new SystemQuestError('invalid_quest', 'rewardNote is required when rewardCostsMoney is true', 400);
+  }
+
+  let targetCostCents: number | null = null;
+  let amountSavedCents = 0;
+  let inventoryItemId: string | null = null;
+  const hasBudgetField = body.targetCostCents != null
+    || body.amountSavedCents != null
+    || body.inventoryItemId != null
+    || body.inventoryItemSlug != null;
+  if (kind !== 'acquisition' && hasBudgetField) {
+    throw new SystemQuestError(
+      'invalid_quest',
+      'targetCostCents, amountSavedCents, and inventory item links are only valid on acquisition quests',
+      400,
+    );
+  }
+  if (kind === 'acquisition') {
+    if (body.inventoryItemSlug != null) {
+      throw new SystemQuestError('invalid_quest', 'inventoryItemSlug must be resolved before validation', 400);
+    }
+    if (body.targetCostCents != null && body.targetCostCents !== '') {
+      targetCostCents = readMoneyCents(body.targetCostCents, 'targetCostCents', false);
+    }
+    if (body.amountSavedCents != null && body.amountSavedCents !== '') {
+      amountSavedCents = readMoneyCents(body.amountSavedCents, 'amountSavedCents', false) ?? 0;
+    }
+    if (body.inventoryItemId != null && body.inventoryItemId !== '') {
+      if (typeof body.inventoryItemId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.inventoryItemId)) {
+        throw new SystemQuestError('invalid_quest', 'inventoryItemId must be a uuid', 400);
+      }
+      inventoryItemId = body.inventoryItemId;
+    }
   }
 
   const onThursday = isThursdayYmd(questCalendarDate({ scheduledFor, deadline }, opts.now));
@@ -442,6 +550,9 @@ export function normalizeQuestDraft(
       training,
       thursdayTrainingFlag,
       recoveryType,
+      targetCostCents,
+      amountSavedCents,
+      inventoryItemId,
     },
   };
 }
@@ -469,6 +580,11 @@ export interface PublicQuest {
   thursdayTrainingFlag: boolean;
   recoveryType: RecoveryType | null;
   parentQuestId: string | null;
+  targetCostCents: number | null;
+  amountSavedCents: number;
+  inventoryItemId: string | null;
+  /** Always false on acquisition quests. Money saved or spent is not experience. */
+  budgetGrantsXp?: false;
   resolution: QuestResolution | null;
   resolvedAt: string | null;
   editedAt: string | null;
@@ -514,6 +630,9 @@ export function presentQuest(quest: SystemQuestRecord, opts?: { includeHidden?: 
       thursdayTrainingFlag: false,
       recoveryType: null,
       parentQuestId: null,
+      targetCostCents: null,
+      amountSavedCents: 0,
+      inventoryItemId: null,
       resolution: null,
       resolvedAt: null,
       ...editMarker(quest, false),
@@ -542,6 +661,10 @@ export function presentQuest(quest: SystemQuestRecord, opts?: { includeHidden?: 
     thursdayTrainingFlag: quest.thursdayTrainingFlag,
     recoveryType: quest.recoveryType,
     parentQuestId: quest.parentQuestId,
+    targetCostCents: quest.targetCostCents,
+    amountSavedCents: quest.amountSavedCents,
+    inventoryItemId: quest.inventoryItemId,
+    ...(quest.kind === 'acquisition' ? { budgetGrantsXp: false as const } : {}),
     resolution: quest.resolution,
     resolvedAt: quest.resolvedAt,
     ...editMarker(quest, true),
@@ -647,8 +770,8 @@ export function planQuestCorrection(
 
   if ('xpReward' in body) {
     const before = { ...xpReward };
-    const next = assertXpMap(body.xpReward, 'xpReward', quest.kind === 'penalty');
-    if (quest.kind !== 'penalty' && Object.keys(next).length === 0) {
+    const next = assertXpMap(body.xpReward, 'xpReward', quest.kind === 'penalty' || quest.kind === 'acquisition');
+    if (quest.kind !== 'penalty' && quest.kind !== 'acquisition' && Object.keys(next).length === 0) {
       throw new SystemQuestError('invalid_quest', 'xpReward must include at least one class', 400);
     }
     if (!sameXp(before, next)) {
@@ -811,6 +934,13 @@ function applyObjectiveEdits(objectives: QuestObjective[], raw: unknown, changes
           409,
         );
       }
+      if (!objective.done && objective.progress >= update.target && objective.xpReward && Object.keys(objective.xpReward).length > 0) {
+        throw new SystemQuestError(
+          'milestone_xp_via_progress',
+          `objective ${update.id} would complete and pay milestone XP. Mark it done with PATCH /progress.`,
+          409,
+        );
+      }
       changes.push(`objective ${update.id} target: ${objective.target} → ${update.target}`);
       objective.target = update.target;
       objective.done = objective.progress >= objective.target;
@@ -869,6 +999,9 @@ function parseObjectiveUpdates(raw: unknown): ObjectiveUpdate[] {
     if ('progress' in row || 'done' in row) {
       throw new SystemQuestError('invalid_quest', 'objective progress is changed through PATCH /progress', 400);
     }
+    if ('xpReward' in row || 'xpAwardedAt' in row) {
+      throw new SystemQuestError('invalid_quest', 'objective xpReward is fixed when the quest is created', 400);
+    }
     if (typeof row.id !== 'string' || !row.id.trim()) {
       throw new SystemQuestError('invalid_quest', `objectives.update[${index}].id is required`, 400);
     }
@@ -892,6 +1025,9 @@ function parseObjectiveAdds(raw: unknown): ObjectiveAdd[] {
     const row = item as Record<string, unknown>;
     if ('progress' in row || 'done' in row) {
       throw new SystemQuestError('invalid_quest', 'new objectives start at zero progress', 400);
+    }
+    if ('xpReward' in row || 'xpAwardedAt' in row) {
+      throw new SystemQuestError('invalid_quest', 'objective xpReward is fixed when the quest is created', 400);
     }
     const label = requireText(row.label, `objectives.add[${index}].label`, 300);
     const target = row.target == null ? 1 : parseTarget(row.target, `objectives.add[${index}].target`);
@@ -1078,7 +1214,7 @@ function freshObjectives(raw: unknown): QuestDraft['objectives'] {
       throw new SystemQuestError('invalid_quest', `objectives[${index}] cannot include progress or done`, 400);
     }
   });
-  return normalizeObjectives(raw).map(objective => ({
+  return normalizeObjectives(raw, 'penalty').map(objective => ({
     id: objective.id,
     label: objective.label,
     target: objective.target,

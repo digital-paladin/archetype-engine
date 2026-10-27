@@ -5,11 +5,13 @@ import {
   presentQuest,
   PublicQuest,
   QuestEdit,
+  QuestObjective,
   QuestStatus,
   SystemMessageRecord,
   SystemQuestError,
   SystemQuestRecord,
   normalizeQuestDraft,
+  readMoneyCents,
   xpMapToAwards,
 } from '../domain/systemQuest';
 import { emitToUser } from '../realtime/userEmit';
@@ -17,6 +19,14 @@ import { getDataService } from './data/dataService';
 import { getSystemQuestStore, newQuestId } from './systemQuest.store';
 import { ActivityWhenError, resolveActivityWhen } from './activityOccurredAt';
 import { persistClassXpAwards } from './xpAward.service';
+import { InventoryError } from '../domain/inventory';
+import {
+  createInventoryItem,
+  linkInventoryItemToQuest,
+  markInventoryItemStocked,
+  unlinkInventoryQuest,
+} from './inventory.service';
+import { getInventoryStore } from './inventory.store';
 
 let io: SocketIOServer | null = null;
 
@@ -79,6 +89,9 @@ function blankRecord(
     thursdayTrainingFlag: quest.thursdayTrainingFlag,
     recoveryType: quest.recoveryType,
     parentQuestId,
+    targetCostCents: quest.targetCostCents,
+    amountSavedCents: quest.amountSavedCents,
+    inventoryItemId: quest.inventoryItemId,
     resolution: null,
     edits: [],
     createdAt: iso,
@@ -99,8 +112,9 @@ export async function createSystemQuest(
   if (idempotencyKey) {
     const existing = await store.findByIdempotency(userId, idempotencyKey);
     if (existing) {
+      const [quest] = await attachLinkedItems(userId, [presentQuest(existing, { includeHidden: true })]);
       return {
-        quest: presentQuest(existing, { includeHidden: true }),
+        quest,
         created: false,
         idempotentReplay: true,
         warning: null,
@@ -108,11 +122,26 @@ export async function createSystemQuest(
     }
   }
 
-  const normalized = normalizeQuestDraft(body, {
+  const inlineItem = body.inventoryItem;
+  const bodyWithoutInline: Record<string, unknown> = { ...body };
+  delete bodyWithoutInline.inventoryItem;
+  if (inlineItem != null && body.kind !== 'acquisition') {
+    throw new SystemQuestError('invalid_quest', 'inventoryItem is only valid on acquisition quests', 400);
+  }
+  if (inlineItem != null && (body.inventoryItemId != null || body.inventoryItemSlug != null)) {
+    throw new SystemQuestError('invalid_quest', 'Send inventoryItem or an inventory item id, not both', 400);
+  }
+
+  const normalized = normalizeQuestDraft(await resolveAcquisitionLink(userId, bodyWithoutInline), {
     authKind,
     now,
     internalSource: opts?.internalSource,
   });
+
+  let inventoryItemId = normalized.quest.inventoryItemId;
+  if (inlineItem != null) {
+    inventoryItemId = await createOrReuseInventoryItem(userId, inlineItem);
+  }
 
   const record = blankRecord(
     userId,
@@ -122,6 +151,7 @@ export async function createSystemQuest(
     now,
     opts?.parentQuestId ?? null,
   );
+  record.inventoryItemId = inventoryItemId;
 
   let stored: SystemQuestRecord;
   try {
@@ -130,8 +160,9 @@ export async function createSystemQuest(
     if (isUnique(err)) {
       const existing = await store.findByIdempotency(userId, normalized.idempotencyKey);
       if (existing) {
+        const [quest] = await attachLinkedItems(userId, [presentQuest(existing, { includeHidden: true })]);
         return {
-          quest: presentQuest(existing, { includeHidden: true }),
+          quest,
           created: false,
           idempotentReplay: true,
           warning: null,
@@ -141,7 +172,16 @@ export async function createSystemQuest(
     throw err;
   }
 
-  if (stored.deadline && new Date(stored.deadline).getTime() <= now.getTime()) {
+  if (stored.inventoryItemId) {
+    try {
+      await linkInventoryItemToQuest(userId, stored.inventoryItemId, stored.id);
+    } catch (err) {
+      console.error('[SYSTEM] inventory link was not stored:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  // Acquisition goals persist. A deadline on them is a target date, not a fail condition.
+  if (stored.kind !== 'acquisition' && stored.deadline && new Date(stored.deadline).getTime() <= now.getTime()) {
     const resolved = await resolveSystemQuest(userId, stored.id, 'expired', { now });
     return {
       quest: resolved.quest,
@@ -163,7 +203,105 @@ export async function createSystemQuest(
     at: stored.createdAt,
   });
 
-  return { quest: presented, created: true, idempotentReplay: false, warning: normalized.warning };
+  return {
+    quest: await attachLinkedItems(userId, [presented]).then(rows => rows[0]),
+    created: true,
+    idempotentReplay: false,
+    warning: normalized.warning,
+  };
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
+ * Turn inventoryItemId / inventoryItemSlug into a row uuid before draft validation.
+ * The dollar amount is never read here and this function does not award XP.
+ */
+/**
+ * Create the linked row from an inline `inventoryItem`, or reuse the slug.
+ * Service credentials cannot call /api/inventory, so the quest route does it.
+ * This does not award XP. Call it only after the quest draft has validated.
+ */
+async function createOrReuseInventoryItem(userId: string, inlineItem: unknown): Promise<string> {
+  if (typeof inlineItem !== 'object' || inlineItem == null || Array.isArray(inlineItem)) {
+    throw new SystemQuestError('invalid_quest', 'inventoryItem must be an object', 400);
+  }
+  const draft = inlineItem as Record<string, unknown>;
+  const slug = typeof draft.id === 'string' ? draft.id : (typeof draft.slug === 'string' ? draft.slug : '');
+  try {
+    const existing = slug ? await getInventoryStore().findBySlug(userId, slug) : null;
+    if (existing) return existing.rowId;
+    return (await createInventoryItem(userId, draft)).rowId;
+  } catch (err) {
+    if (err instanceof InventoryError) {
+      throw new SystemQuestError(err.code === 'duplicate_item' ? 'duplicate_item' : 'invalid_quest', err.message, err.status);
+    }
+    throw err;
+  }
+}
+
+async function resolveAcquisitionLink(
+  userId: string,
+  body: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  if (body.inventoryItemId == null && body.inventoryItemSlug == null) return body;
+  if (body.kind !== 'acquisition') return body;
+
+  const id = body.inventoryItemId;
+  const slug = body.inventoryItemSlug;
+  if (id != null && (typeof id !== 'string' || !UUID_RE.test(id))) {
+    throw new SystemQuestError('invalid_quest', 'inventoryItemId must be a uuid', 400);
+  }
+  if (slug != null && (typeof slug !== 'string' || !SLUG_RE.test(slug) || slug.length > 80)) {
+    throw new SystemQuestError('invalid_quest', 'inventoryItemSlug must be a lowercase slug', 400);
+  }
+
+  const store = getInventoryStore();
+  const byId = typeof id === 'string' ? await store.findByRowId(userId, id) : null;
+  const bySlug = typeof slug === 'string' ? await store.findBySlug(userId, slug) : null;
+  if (typeof id === 'string' && !byId) {
+    throw new SystemQuestError('item_not_found', 'Linked inventory item was not found', 404);
+  }
+  if (typeof slug === 'string' && !bySlug) {
+    throw new SystemQuestError('item_not_found', 'Linked inventory item was not found', 404);
+  }
+  if (byId && bySlug && byId.rowId !== bySlug.rowId) {
+    throw new SystemQuestError('invalid_quest', 'inventoryItemId and inventoryItemSlug refer to different items', 400);
+  }
+  const rowId = (byId ?? bySlug)?.rowId ?? null;
+  const next: Record<string, unknown> = { ...body, inventoryItemId: rowId };
+  delete next.inventoryItemSlug;
+  return next;
+}
+
+async function attachLinkedItems(userId: string, quests: PublicQuest[]): Promise<PublicQuest[]> {
+  const ids = [...new Set(quests.map(quest => quest.inventoryItemId).filter((id): id is string => !!id))];
+  if (!ids.length) return quests;
+  let items: Awaited<ReturnType<ReturnType<typeof getInventoryStore>['findByRowIds']>> = [];
+  try {
+    items = await getInventoryStore().findByRowIds(userId, ids);
+  } catch (err) {
+    console.error('[SYSTEM] linked inventory lookup failed:', err instanceof Error ? err.message : err);
+    return quests;
+  }
+  const byId = new Map(items.map(item => [item.rowId, item]));
+  return quests.map(quest => {
+    if (!quest.inventoryItemId) return quest;
+    const item = byId.get(quest.inventoryItemId);
+    return {
+      ...quest,
+      linkedItem: item
+        ? {
+          id: item.rowId,
+          slug: item.id,
+          name: item.name,
+          category: item.category,
+          stockStatus: item.stockStatus,
+        }
+        : null,
+    };
+  });
 }
 
 /** Quest XP lands on scheduledFor when that day is a valid activity day; otherwise now. */
@@ -272,6 +410,8 @@ export async function resolveSystemQuest(
     throw err;
   }
 
+  if (outcome === 'cleared') await stockLinkedItem(next);
+
   let penaltyQuestId: string | undefined;
   if (outcome !== 'cleared' && existing.penalty?.penaltyQuest) {
     try {
@@ -317,12 +457,22 @@ export async function resolveSystemQuest(
     at: iso,
   });
 
+  const [quest] = await attachLinkedItems(userId, [presentQuest(committed)]);
   return {
-    quest: presentQuest(committed),
+    quest,
     alreadyResolved: false,
     xpApplied,
     changed: true,
   };
+}
+
+async function stockLinkedItem(quest: SystemQuestRecord): Promise<void> {
+  if (quest.status !== 'cleared' || !quest.inventoryItemId) return;
+  try {
+    await markInventoryItemStocked(quest.userId, quest.inventoryItemId);
+  } catch (err) {
+    console.error('[SYSTEM] inventory item was not marked stocked:', err instanceof Error ? err.message : err);
+  }
 }
 
 async function finishStaleResolution(existing: SystemQuestRecord): Promise<ResolveResult> {
@@ -334,15 +484,19 @@ async function finishStaleResolution(existing: SystemQuestRecord): Promise<Resol
       updatedAt: new Date().toISOString(),
     };
     await getSystemQuestStore().update(updated);
+    await stockLinkedItem(updated);
+    const [quest] = await attachLinkedItems(existing.userId, [presentQuest(updated)]);
     return {
-      quest: presentQuest(updated),
+      quest,
       alreadyResolved: true,
       xpApplied: applied,
       changed: false,
     };
   }
+  await stockLinkedItem(existing);
+  const [quest] = await attachLinkedItems(existing.userId, [presentQuest(existing)]);
   return {
-    quest: presentQuest(existing),
+    quest,
     alreadyResolved: true,
     xpApplied: [],
     changed: false,
@@ -359,7 +513,7 @@ export async function listSystemQuests(
   const filtered = opts?.status ? rows.filter(q => q.status === opts.status) : rows;
   return {
     serverTime: now.toISOString(),
-    quests: filtered.map(q => presentQuest(q, { includeHidden: opts?.includeHidden })),
+    quests: await attachLinkedItems(userId, filtered.map(q => presentQuest(q, { includeHidden: opts?.includeHidden }))),
   };
 }
 
@@ -372,12 +526,14 @@ export async function getSystemQuest(
   await expireDueForUser(userId, now);
   const quest = await getSystemQuestStore().findById(userId, id);
   if (!quest) throw new SystemQuestError('not_found', 'Quest not found', 404);
-  return presentQuest(quest, { includeHidden: opts?.includeHidden });
+  const [presented] = await attachLinkedItems(userId, [presentQuest(quest, { includeHidden: opts?.includeHidden })]);
+  return presented;
 }
 
 async function expireDueForUser(userId: string, now: Date): Promise<void> {
   const due = await getSystemQuestStore().listActiveDue(now.toISOString(), userId);
   for (const quest of due) {
+    if (quest.kind === 'acquisition') continue;
     await resolveSystemQuest(userId, quest.id, 'expired', { now });
   }
 }
@@ -386,6 +542,7 @@ export async function expireDueQuests(now = new Date()): Promise<number> {
   const due = await getSystemQuestStore().listActiveDue(now.toISOString());
   let changed = 0;
   for (const quest of due) {
+    if (quest.kind === 'acquisition') continue;
     const result = await resolveSystemQuest(quest.userId, quest.id, 'expired', { now });
     if (result.changed) changed += 1;
   }
@@ -396,7 +553,7 @@ export async function updateQuestProgress(
   userId: string,
   id: string,
   body: { objectiveId?: string; progress?: number; done?: boolean },
-): Promise<PublicQuest> {
+): Promise<{ quest: PublicQuest; xpApplied: ClassXp[] }> {
   const store = getSystemQuestStore();
   const quest = await store.findById(userId, id);
   if (!quest) throw new SystemQuestError('not_found', 'Quest not found', 404);
@@ -406,6 +563,7 @@ export async function updateQuestProgress(
   if (!body.objectiveId) throw new SystemQuestError('invalid_quest', 'objectiveId is required', 400);
   const objective = quest.objectives.find(o => o.id === body.objectiveId);
   if (!objective) throw new SystemQuestError('not_found', 'Objective not found', 404);
+  const before = snapshotObjective(objective);
   if (body.progress != null) {
     if (typeof body.progress !== 'number' || !Number.isInteger(body.progress) || body.progress < 0) {
       throw new SystemQuestError('invalid_quest', 'progress must be a non-negative integer', 400);
@@ -414,16 +572,129 @@ export async function updateQuestProgress(
   }
   if (body.done === true) objective.progress = objective.target;
   objective.done = body.done === true || objective.progress >= objective.target;
-  quest.updatedAt = new Date().toISOString();
+
+  const awards = milestoneAwards(quest, objective, before);
+  const at = new Date().toISOString();
+  if (awards.length) objective.xpAwardedAt = at;
+  quest.updatedAt = at;
   const saved = await store.update(quest);
+
+  let xpApplied: ClassXp[] = [];
+  if (awards.length) {
+    try {
+      xpApplied = await commitXp(userId, awards, saved);
+    } catch (err) {
+      Object.assign(objective, before);
+      quest.updatedAt = new Date().toISOString();
+      await store.update(quest);
+      throw err;
+    }
+  }
+
+  const paid = xpApplied.length
+    ? ` · ${xpApplied.map(row => `+${row.xp} ${row.className}`).join(', ')}`
+    : '';
   notify(userId, {
     type: 'progress',
     title: quest.hiddenUntilRevealed && !quest.revealedAt ? 'Hidden quest updated' : quest.title,
-    detail: `${objective.label}: ${objective.progress}/${objective.target}`,
+    detail: `${objective.label}: ${objective.progress}/${objective.target}${paid}`,
     questId: quest.id,
     at: quest.updatedAt,
   });
-  return presentQuest(saved);
+  const [presented] = await attachLinkedItems(userId, [presentQuest(saved)]);
+  return { quest: presented, xpApplied };
+}
+
+function snapshotObjective(objective: QuestObjective): QuestObjective {
+  return { ...objective, xpReward: objective.xpReward ? { ...objective.xpReward } : undefined };
+}
+
+/**
+ * Milestone XP is the objective's stored class map, paid once on the
+ * not-done → done transition. `progress`, `target`, and the budget are not XP.
+ */
+function milestoneAwards(
+  quest: SystemQuestRecord,
+  objective: QuestObjective,
+  before: QuestObjective,
+): ClassXp[] {
+  if (quest.kind !== 'acquisition') return [];
+  if (!objective.done || before.done || before.xpAwardedAt || objective.xpAwardedAt) return [];
+  return xpMapToAwards(objective.xpReward, 1);
+}
+
+const BUDGET_FIELDS = new Set(['targetCostCents', 'amountSavedCents', 'inventoryItemId', 'inventoryItemSlug']);
+
+/**
+ * Update an acquisition quest's money tracker and optional item link.
+ * This never calls the XP applier. Completing a "save the money" milestone
+ * is a separate PATCH /progress on that objective.
+ */
+export async function updateAcquisitionBudget(
+  userId: string,
+  id: string,
+  body: Record<string, unknown>,
+): Promise<PublicQuest> {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    throw new SystemQuestError('invalid_quest', 'body must be an object', 400);
+  }
+  for (const key of Object.keys(body)) {
+    if (!BUDGET_FIELDS.has(key)) {
+      throw new SystemQuestError(
+        'invalid_quest',
+        `${key} cannot be updated on the budget route. Saving or spending does not award XP.`,
+        400,
+      );
+    }
+  }
+  const store = getSystemQuestStore();
+  const quest = await store.findById(userId, id);
+  if (!quest) throw new SystemQuestError('not_found', 'Quest not found', 404);
+  if (quest.kind !== 'acquisition') {
+    throw new SystemQuestError('invalid_quest', 'Budget tracking is only for acquisition quests', 400);
+  }
+  if (quest.status !== 'active') {
+    throw new SystemQuestError('not_active', 'Only active acquisition quests accept budget updates', 409);
+  }
+
+  if ('targetCostCents' in body) {
+    quest.targetCostCents = readMoneyCents(body.targetCostCents, 'targetCostCents', true);
+  }
+  if ('amountSavedCents' in body) {
+    const saved = readMoneyCents(body.amountSavedCents, 'amountSavedCents', false);
+    quest.amountSavedCents = saved ?? 0;
+  }
+  if ('inventoryItemId' in body || 'inventoryItemSlug' in body) {
+    const resolved = await resolveAcquisitionLink(userId, {
+      kind: 'acquisition',
+      inventoryItemId: body.inventoryItemId ?? null,
+      inventoryItemSlug: body.inventoryItemSlug,
+    });
+    const nextId = (resolved.inventoryItemId as string | null) ?? null;
+    if (quest.inventoryItemId && quest.inventoryItemId !== nextId) {
+      try {
+        await unlinkInventoryQuest(userId, quest.id);
+      } catch (err) {
+        console.error('[SYSTEM] previous inventory link was not cleared:', err instanceof Error ? err.message : err);
+      }
+    }
+    quest.inventoryItemId = nextId;
+    if (nextId) {
+      try {
+        await linkInventoryItemToQuest(userId, nextId, quest.id);
+      } catch (err) {
+        if (err instanceof InventoryError) {
+          throw new SystemQuestError('item_not_found', err.message, err.status);
+        }
+        throw err;
+      }
+    }
+  }
+
+  quest.updatedAt = new Date().toISOString();
+  const saved = await store.update(quest);
+  const [presented] = await attachLinkedItems(userId, [presentQuest(saved)]);
+  return presented;
 }
 
 export interface CorrectQuestResult {
