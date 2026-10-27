@@ -123,7 +123,7 @@ describe('POST /api/activities — social XP', () => {
       occurredAt: WHEN,
       duration: 30,
       xp: 9999,
-      reflection: 'too short',
+      reflection: '   ',
     });
 
     expect(res.status).toBe(200);
@@ -134,7 +134,7 @@ describe('POST /api/activities — social XP', () => {
     expect(mockUpsertCharacterStats).not.toHaveBeenCalled();
   });
 
-  it('pays the flat casual amount and does not level a skill tree', async () => {
+  it('credits the flat casual amount to the default tree', async () => {
     const res = await request(makeApp()).post('/api/activities').send({
       activityType: 'social',
       occurredAt: WHEN,
@@ -145,14 +145,65 @@ describe('POST /api/activities — social XP', () => {
     expect(res.status).toBe(200);
     expect(res.body.xp).toBe(CASUAL_SOCIAL_XP);
     expect(res.body.social.mode).toBe('casual');
-    expect(res.body.category).toBe('Social');
+    expect(res.body.category).toBe('Social Dynamics');
     await flush();
     expect(mockLogActivity).toHaveBeenCalledWith('test-user', expect.objectContaining({
-      class_name: 'Social',
+      class_name: 'Social Dynamics',
       xp_awarded: CASUAL_SOCIAL_XP,
       notes: `[social-xp:casual:${CASUAL_SOCIAL_XP}]`,
     }));
-    expect(mockUpsertCharacterStats).not.toHaveBeenCalled();
+    expect(mockUpsertCharacterStats).toHaveBeenCalledWith('test-user', expect.objectContaining({
+      class_name: 'Social Dynamics',
+      current_xp: CASUAL_SOCIAL_XP,
+    }));
+  });
+
+  it('credits casual XP to Charisma when the activity text says so', async () => {
+    const res = await request(makeApp()).post('/api/activities').send({
+      activityType: 'social',
+      occurredAt: WHEN,
+      label: 'storytelling night',
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.xp).toBe(CASUAL_SOCIAL_XP);
+    expect(res.body.category).toBe('Charisma');
+    expect(res.body.social.reasons).toContain('casual_tree_inferred');
+  });
+
+  it('pays Developer XP for a meeting only when it is marked TTI', async () => {
+    const tti = await request(makeApp()).post('/api/activities').send({
+      activityType: 'meeting-active',
+      occurredAt: WHEN,
+      duration: 60,
+      workTag: 'tti',
+    });
+    expect(tti.status).toBe(200);
+    expect(tti.body.social).toBeUndefined();
+    expect(tti.body.category).toBe('developer');
+    expect(tti.body.xp).toBe(22);
+
+    const tagged = await request(makeApp()).post('/api/activities').send({
+      activityType: 'meetings-passive',
+      occurredAt: WHEN,
+      duration: 60,
+      tags: ['tti'],
+    });
+    expect(tagged.status).toBe(200);
+    expect(tagged.body.xp).toBe(22);
+    expect(tagged.body.category).toBe('developer');
+    expect(tagged.body.social).toBeUndefined();
+
+    const socialMeeting = await request(makeApp()).post('/api/activities').send({
+      activityType: 'meeting-active',
+      occurredAt: WHEN,
+      duration: 60,
+      xp: 9999,
+      notes: 'humor at the table',
+    });
+    expect(socialMeeting.status).toBe(200);
+    expect(socialMeeting.body.xp).toBe(CASUAL_SOCIAL_XP);
+    expect(socialMeeting.body.category).toBe('Charisma');
+    expect(socialMeeting.body.social.mode).toBe('casual');
   });
 
   it('stops casual XP at the weekly cap', async () => {
@@ -256,5 +307,19 @@ describe('GET /api/activities/calculate-xp — social preview', () => {
     expect(res.body.xp).toBe(CASUAL_SOCIAL_XP);
     expect(res.body.xp).toBeLessThan(10);
     expect(res.body.weeklyCap).toBe(CASUAL_SOCIAL_WEEKLY_CAP);
+    expect(res.body.defaultTree).toBe('Social Dynamics');
+  });
+
+  it('previews Developer XP for a meeting only when workTag is tti', async () => {
+    const social = await request(makeApp()).get('/api/activities/calculate-xp?type=meeting-active&duration=60');
+    expect(social.status).toBe(200);
+    expect(social.body.xp).toBe(CASUAL_SOCIAL_XP);
+    expect(social.body.category).toBe('social');
+
+    const tti = await request(makeApp()).get('/api/activities/calculate-xp?type=meeting-active&duration=60&workTag=tti');
+    expect(tti.status).toBe(200);
+    expect(tti.body.category).toBe('developer');
+    expect(tti.body.xp).toBe(22);
+    expect(tti.body.workTag).toBe('tti');
   });
 });

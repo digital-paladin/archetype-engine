@@ -51,6 +51,8 @@ export const BACKEND_ACTIVITY_TYPES: ReadonlySet<string> = new Set([
   'admin-planning',
   'admin-review',
   'prayer-routine',
+  'meeting-active',
+  'meeting-passive',
 ]);
 
 /**
@@ -82,8 +84,10 @@ export const ACTIVITY_TYPE_ALIASES: Readonly<Record<string, string>> = {
   'coding-architecture': 'personal-project',
   'deep-focus': 'personal-project',
   'learning-tech': 'personal-project',
-  'meetings-active': 'personal-project',
-  'meetings-passive': 'personal-project',
+  // Meetings stay meeting-* so Developer XP requires an explicit TTI workTag.
+  // Without that tag the server scores them with the social rules.
+  'meetings-active': 'meeting-active',
+  'meetings-passive': 'meeting-passive',
   'code-review-doing': 'admin-review',
   'code-review-addressing': 'admin-review',
 

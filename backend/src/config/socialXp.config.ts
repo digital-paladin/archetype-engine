@@ -20,9 +20,8 @@ export const SOCIAL_DYNAMICS_CLASS = 'Social Dynamics';
 export const CHARISMA_CLASS = 'Charisma';
 
 /**
- * activity_log.class_name for a social row that did not pay a skill tree
- * (casual time, a blocked overlap, or a goal with no reflection).
- * Not a skill tree and not written to character_stats.
+ * activity_log.class_name when a social row paid nothing (overlap, missing
+ * reflection, or the weekly cap is already full). Not a skill tree.
  */
 export const CASUAL_SOCIAL_LOG_CLASS = 'Social';
 
@@ -31,22 +30,67 @@ export const DEEP_WORK_XP_FLOOR = 10;
 
 /**
  * Flat XP for one casual social event (no recognized skill goal).
- * Logged on the activity row only — it does not level a skill tree.
+ * Credited to one tree (see CASUAL_TREE_KEYWORDS). The amount, not the tree,
+ * is what the weekly cap limits.
  */
 export const CASUAL_SOCIAL_XP = 2;
 
 /**
- * Most casual XP a single week can grant. Monday 00:00 America/Chicago
- * through the next Monday. Must stay strictly below DEEP_WORK_XP_FLOOR so
+ * Most casual XP a single week can grant. Sunday 00:00 America/Chicago
+ * through the next Sunday. Must stay strictly below DEEP_WORK_XP_FLOOR so
  * the capped week cannot exceed one minimum deep-work award.
  */
 export const CASUAL_SOCIAL_WEEKLY_CAP = 8;
 
 /**
- * Trimmed length of the post-event reflection required before skill XP is paid.
- * Short on purpose: a sentence, not a journal entry, and not a one-word note.
+ * Tree used when the activity text does not name a social or charisma phrase.
+ * Unspecified social time is treated as group and room dynamics.
  */
-export const SOCIAL_REFLECTION_MIN_CHARS = 24;
+export const CASUAL_SOCIAL_DEFAULT_TREE: SocialTreeId = 'social-dynamics';
+
+/**
+ * Phrases that choose the tree for casual XP. Longest match wins.
+ * A tie between the two trees uses CASUAL_SOCIAL_DEFAULT_TREE.
+ * Social Dynamics: networking, group, rapport (and the other tree skills).
+ * Charisma: presence, storytelling, humor, speaking (and the other tree skills).
+ */
+export const CASUAL_TREE_KEYWORDS: Record<SocialTreeId, readonly string[]> = {
+  'social-dynamics': [
+    'reading people',
+    'reading rooms',
+    'networking',
+    'group dynamics',
+    'group',
+    'rapport',
+    'conflict',
+    'hosting',
+    'hard conversation',
+  ],
+  charisma: [
+    'presence',
+    'storytelling',
+    'humor',
+    'humour',
+    'confident approaches',
+    'confident approach',
+    'public speaking',
+    'speaking',
+    'stranger conversation',
+  ],
+};
+
+/**
+ * Explicit mark that a meeting is TTI job work and pays Developer XP.
+ * `workTag: "tti"` or `tags` containing `"tti"`. No other value counts.
+ */
+export const TTI_WORK_TAG = 'tti';
+
+export const MEETING_ACTIVITY_TYPES: readonly string[] = [
+  'meeting-active',
+  'meeting-passive',
+  'meetings-active',
+  'meetings-passive',
+];
 
 /**
  * Deliberate-practice rate. Same shape as art practice in XpCalculatorService:
@@ -176,6 +220,22 @@ export function isSocialActivityType(activityType: string): boolean {
   return activityType === 'social' || activityType.startsWith('social-');
 }
 
+export function isMeetingActivityType(activityType: string): boolean {
+  return MEETING_ACTIVITY_TYPES.includes(activityType);
+}
+
+function markIsTti(value: unknown): boolean {
+  return typeof value === 'string' && value.trim().toLowerCase() === TTI_WORK_TAG;
+}
+
+/** True only for an explicit TTI work tag. Omitted and any other value are not TTI. */
+export function isTtiWorkMark(workTag: unknown, tags?: unknown): boolean {
+  if (markIsTti(workTag)) return true;
+  if (typeof tags === 'string') return markIsTti(tags);
+  if (Array.isArray(tags)) return tags.some(markIsTti);
+  return false;
+}
+
 export function skillGoalsFromActivityType(activityType: string): string[] {
   if (!activityType.startsWith('social-')) return [];
   const phrase = activityType.slice('social-'.length).replace(/-/g, ' ').trim();
@@ -187,7 +247,4 @@ if (CASUAL_SOCIAL_WEEKLY_CAP >= DEEP_WORK_XP_FLOOR) {
 }
 if (CASUAL_SOCIAL_XP <= 0 || CASUAL_SOCIAL_XP > CASUAL_SOCIAL_WEEKLY_CAP) {
   throw new Error('CASUAL_SOCIAL_XP must be positive and within the weekly cap');
-}
-if (SOCIAL_REFLECTION_MIN_CHARS < 8) {
-  throw new Error('SOCIAL_REFLECTION_MIN_CHARS is too short to count as a reflection');
 }

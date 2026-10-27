@@ -2,10 +2,10 @@
  * How a social event earns XP.
  *
  * Skill XP (Social Dynamics and/or Charisma) is paid only when the log names
- * a skill on that tree AND includes a short post-event reflection.
+ * a skill on that tree AND includes a non-empty post-event reflection.
  * One event pays both trees only when it names a skill for each.
  * Casual time, with no recognized skill goal, pays a flat amount capped
- * per week so the cap stays below one minimum deep-work award.
+ * per week (Sunday, America/Chicago) and credits that amount to one tree.
  * An interval that overlaps a recorded work or training block pays 0 and is
  * flagged. There is no prospective calendar — see loadCalendarBlocks().
  */
@@ -24,14 +24,15 @@ import { mapTogglProjectOrTags } from './togglActivityMap';
 import { zoneOffset } from './wearableActivityXp.service';
 import { chicagoDay } from './activityOccurredAt';
 import {
+  CASUAL_SOCIAL_DEFAULT_TREE,
   CASUAL_SOCIAL_WEEKLY_CAP,
   CASUAL_SOCIAL_XP,
+  CASUAL_TREE_KEYWORDS,
   CHARISMA_CLASS,
   isDeepWorkActivityType,
   isSocialActivityType,
   skillGoalsFromActivityType,
   SOCIAL_DYNAMICS_CLASS,
-  SOCIAL_REFLECTION_MIN_CHARS,
   SOCIAL_SKILL_BASE_XP,
   SOCIAL_SKILL_DURATION_MULTIPLIER,
   SOCIAL_SKILLS,
@@ -90,6 +91,10 @@ export interface SocialXpInput {
   durationMinutes: number | null;
   skillGoals?: unknown;
   reflection?: unknown;
+  /** Free-text activity label or description. Used only to pick a casual tree. */
+  label?: unknown;
+  /** User notes. Used only to pick a casual tree. */
+  notes?: unknown;
   scheduleBlocks?: readonly ScheduleBlock[];
   casualXpAwardedThisWeek?: number;
 }
@@ -168,8 +173,9 @@ export function reflectionText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+/** Any non-whitespace note counts. There is no character minimum. */
 export function reflectionQualifies(value: unknown): boolean {
-  return reflectionText(value).length >= SOCIAL_REFLECTION_MIN_CHARS;
+  return reflectionText(value).length > 0;
 }
 
 /**
@@ -287,7 +293,7 @@ export function casualXpFromNotes(notes: string | null | undefined): number {
 }
 
 export interface ChicagoWeek {
-  /** YYYY-MM-DD of the Monday in America/Chicago. */
+  /** YYYY-MM-DD of the Sunday in America/Chicago. */
   startDate: string;
   startMs: number;
   endMs: number;
@@ -302,7 +308,7 @@ const WEEKDAY_INDEX: Record<string, number> = {
   Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6,
 };
 
-/** Week containing `instant`. Monday 00:00 America/Chicago, half-open. */
+/** Week containing `instant`. Sunday 00:00 America/Chicago, half-open. */
 export function chicagoWeekContaining(instant: Date): ChicagoWeek {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/Chicago',
@@ -314,9 +320,9 @@ export function chicagoWeekContaining(instant: Date): ChicagoWeek {
   const year = parts.find(p => p.type === 'year')?.value ?? '1970';
   const month = parts.find(p => p.type === 'month')?.value ?? '01';
   const day = parts.find(p => p.type === 'day')?.value ?? '01';
-  const weekday = WEEKDAY_INDEX[parts.find(p => p.type === 'weekday')?.value ?? 'Mon'] ?? 1;
+  const weekday = WEEKDAY_INDEX[parts.find(p => p.type === 'weekday')?.value ?? 'Sun'] ?? 0;
   const date = `${year}-${month}-${day}`;
-  const daysBack = (weekday + 6) % 7;
+  const daysBack = weekday;
   const startDate = shiftIsoDate(date, -daysBack);
   const endDate = shiftIsoDate(startDate, 7);
   const startMs = Date.parse(`${startDate}T00:00:00${zoneOffset(startDate, '00:00')}`);
@@ -337,6 +343,52 @@ export function casualXpAwardedInWeek(
     sum += casualXpFromNotes(entry.notes);
   }
   return sum;
+}
+
+function phraseInText(text: string, keyword: string): boolean {
+  const hay = normalizePhrase(text);
+  const needle = normalizePhrase(keyword);
+  if (!hay || !needle) return false;
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?:^|[^a-z0-9])${escaped}(?:[^a-z0-9]|$)`).test(hay);
+}
+
+export interface CasualTreeInference {
+  tree: SocialTreeId;
+  /** False when nothing matched, or the two trees tied on phrase length. */
+  inferred: boolean;
+  matched?: string;
+}
+
+/**
+ * Pick the tree for casual XP from activity text. Longest keyword wins.
+ * No match, or an equal-length match on both trees, uses the default tree.
+ */
+export function inferCasualTree(texts: readonly unknown[]): CasualTreeInference {
+  let bestLen = 0;
+  const trees = new Set<SocialTreeId>();
+  let matched = '';
+  for (const value of texts) {
+    if (typeof value !== 'string' || !value.trim()) continue;
+    for (const tree of TREE_ORDER) {
+      for (const keyword of CASUAL_TREE_KEYWORDS[tree]) {
+        if (!phraseInText(value, keyword)) continue;
+        if (keyword.length > bestLen) {
+          bestLen = keyword.length;
+          trees.clear();
+          trees.add(tree);
+          matched = keyword;
+        } else if (keyword.length === bestLen) {
+          trees.add(tree);
+        }
+      }
+    }
+  }
+  if (trees.size === 1) {
+    const tree = Array.from(trees)[0];
+    return { tree, inferred: true, matched };
+  }
+  return { tree: CASUAL_SOCIAL_DEFAULT_TREE, inferred: false };
 }
 
 function resolveNamedSkills(goals: readonly string[]): {
@@ -448,9 +500,27 @@ export function evaluateSocialXp(input: SocialXpInput): SocialXpEvaluation {
   const casualXp = Math.min(CASUAL_SOCIAL_XP, remaining);
   const casualXpWithheld = CASUAL_SOCIAL_XP - casualXp;
   if (casualXpWithheld > 0) reasons.push('weekly_cap');
+  if (casualXp <= 0) {
+    return {
+      mode: 'none',
+      awards: [],
+      totalXp: 0,
+      flags: [],
+      reasons,
+      casualXp: 0,
+      casualXpWithheld,
+    };
+  }
+  const inference = inferCasualTree([input.activityType, input.label, input.notes]);
+  reasons.push(inference.inferred ? 'casual_tree_inferred' : 'casual_tree_default');
   return {
-    mode: casualXp > 0 ? 'casual' : 'none',
-    awards: [],
+    mode: 'casual',
+    awards: [{
+      className: SOCIAL_TREE_CLASS[inference.tree] as SocialTreeAward['className'],
+      tree: inference.tree,
+      xp: casualXp,
+      skills: [],
+    }],
     totalXp: casualXp,
     flags: [],
     reasons,

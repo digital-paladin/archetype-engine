@@ -16,7 +16,11 @@ import {
   CASUAL_SOCIAL_LOG_CLASS,
   CASUAL_SOCIAL_WEEKLY_CAP,
   CASUAL_SOCIAL_XP,
+  isMeetingActivityType,
   isSocialActivityType,
+  isTtiWorkMark,
+  SOCIAL_DYNAMICS_CLASS,
+  TTI_WORK_TAG,
 } from '../config/socialXp.config';
 import {
   evaluateSocialXp,
@@ -115,10 +119,14 @@ router.post('/', async (req: Request, res: Response) => {
       throw whenErr;
     }
 
-    // Social XP is server-decided (goal, reflection, weekly cap, overlap).
-    // A client xp value cannot raise it. Other activities keep the client
-    // override used by crafting recipes.
-    const isSocial = isSocialActivityType(activityType);
+    // A meeting pays Developer XP only with an explicit TTI work tag
+    // (`workTag: "tti"` or `tags` containing `"tti"`). Any other meeting uses
+    // the social rules. Social XP is server-decided. A client xp value cannot
+    // raise it. Other activities keep the client override used by crafting.
+    const ttiMeeting = isMeetingActivityType(activityType)
+      && isTtiWorkMark(req.body.workTag, req.body.tags);
+    const isSocial = isSocialActivityType(activityType)
+      || (isMeetingActivityType(activityType) && !ttiMeeting);
     let socialEvaluation: SocialXpEvaluation | null = null;
     let scheduleWarning: string | undefined;
     let xpAwards: Array<{ class: string; xp: number }>;
@@ -141,12 +149,24 @@ router.post('/', async (req: Request, res: Response) => {
         ...interval,
         skillGoals: req.body.skillGoals ?? req.body.skillGoal,
         reflection: req.body.reflection,
+        label: req.body.label ?? req.body.description,
+        notes: rawNotes,
         scheduleBlocks: context.blocks,
         casualXpAwardedThisWeek: context.casualXpAwardedThisWeek,
       });
       xpAwards = socialEvaluation.awards.map(award => ({ class: award.className, xp: award.xp }));
       rawXp = socialEvaluation.totalXp;
       category = socialEvaluation.awards[0]?.className ?? CASUAL_SOCIAL_LOG_CLASS;
+    } else if (ttiMeeting) {
+      const serverAwards = xpCalculator.getMultiClassXP('personal-project', duration);
+      const totalServerXp = serverAwards.reduce((s, a) => s + a.xp, 0);
+      rawXp = (typeof clientXp === 'number' && clientXp > 0) ? Math.round(clientXp) : totalServerXp;
+      category = 'developer';
+      xpAwards = (serverAwards.length === 1 && rawXp !== totalServerXp)
+        ? [{ class: serverAwards[0].class, xp: rawXp }]
+        : serverAwards;
+      const userNotes = typeof rawNotes === 'string' ? rawNotes.trim() : '';
+      notes = userNotes ? `${userNotes} [work-tag:${TTI_WORK_TAG}]` : `[work-tag:${TTI_WORK_TAG}]`;
     } else {
       // Compute per-class XP breakdown (multi-class activities award XP to several classes).
       const serverAwards = xpCalculator.getMultiClassXP(activityType, duration);
@@ -404,14 +424,26 @@ router.get('/calculate-xp', (req: Request, res: Response) => {
       });
     }
 
-    if (isSocialActivityType(activityType)) {
+    if (isMeetingActivityType(activityType) && isTtiWorkMark(req.query.workTag, req.query.tags)) {
+      return res.json({
+        activityType,
+        category: 'developer',
+        xp: xpCalculator.calculateXP('personal-project', duration),
+        duration: duration || 0,
+        workTag: TTI_WORK_TAG,
+        note: 'TTI job meeting. Developer XP uses the personal-project rate.',
+      });
+    }
+
+    if (isSocialActivityType(activityType) || isMeetingActivityType(activityType)) {
       return res.json({
         activityType,
         category: 'social',
         xp: CASUAL_SOCIAL_XP,
         duration: duration || 0,
         weeklyCap: CASUAL_SOCIAL_WEEKLY_CAP,
-        note: 'Preview is the casual flat award. Skill XP is decided when the log includes a skill goal and a reflection.',
+        defaultTree: SOCIAL_DYNAMICS_CLASS,
+        note: 'Preview is the casual flat award on the default tree. Skill XP needs a skill goal and a non-empty reflection. A meeting needs workTag "tti" for Developer XP.',
       });
     }
 

@@ -43,6 +43,12 @@ describe('XpCalculatorService activity class routing', () => {
     expect(classOf('social-networking')).toBe('Social');
     expect(calc.calculateXP('social', 60)).toBe(0);
     expect(calc.calculateXP('social-networking', 30)).toBe(0);
+
+    // Meetings are not Developer XP until the route sees an explicit TTI work tag.
+    expect(classOf('meeting-active')).toBe('Social');
+    expect(classOf('meetings-passive')).toBe('Social');
+    expect(calc.calculateXP('meeting-active', 60)).toBe(0);
+    expect(calc.calculateXP('meeting-passive', 60)).toBe(0);
   });
 
   it('files the old frontend keys as Sage', () => {

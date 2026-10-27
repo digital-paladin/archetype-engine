@@ -8,7 +8,6 @@ import {
   DEEP_WORK_ACTIVITY_TYPES,
   DEEP_WORK_XP_FLOOR,
   SOCIAL_DYNAMICS_CLASS,
-  SOCIAL_REFLECTION_MIN_CHARS,
   SOCIAL_SKILL_BASE_XP,
   SOCIAL_SKILL_DURATION_MULTIPLIER,
 } from '../config/socialXp.config';
@@ -59,26 +58,19 @@ describe('social XP rules', () => {
 
     const noReflection = evaluateSocialXp(event({
       skillGoals: ['networking'],
-      reflection: 'too short',
+      reflection: '   ',
     }));
     expect(noReflection.mode).toBe('none');
     expect(noReflection.totalXp).toBe(0);
     expect(noReflection.reasons).toContain('reflection_required');
     expect(noReflection.casualXp).toBe(0);
 
-    const blank = evaluateSocialXp(event({
+    const oneWord = evaluateSocialXp(event({
       skillGoals: ['public speaking'],
-      reflection: ' '.repeat(SOCIAL_REFLECTION_MIN_CHARS),
+      reflection: 'ok',
     }));
-    expect(blank.totalXp).toBe(0);
-    expect(blank.reasons).toContain('reflection_required');
-
-    const justLongEnough = evaluateSocialXp(event({
-      skillGoals: ['public speaking'],
-      reflection: 'x'.repeat(SOCIAL_REFLECTION_MIN_CHARS),
-    }));
-    expect(justLongEnough.mode).toBe('skill');
-    expect(justLongEnough.awards[0].className).toBe(CHARISMA_CLASS);
+    expect(oneWord.mode).toBe('skill');
+    expect(oneWord.awards[0].className).toBe(CHARISMA_CLASS);
   });
 
   it('maps practice goals onto Social Dynamics and Charisma', () => {
@@ -301,8 +293,11 @@ describe('social XP rules', () => {
     const open = evaluateSocialXp(event({ skillGoals: [], reflection: null }));
     expect(open.mode).toBe('casual');
     expect(open.casualXp).toBe(CASUAL_SOCIAL_XP);
-    expect(open.awards).toEqual([]);
+    expect(open.awards).toEqual([
+      expect.objectContaining({ className: SOCIAL_DYNAMICS_CLASS, tree: 'social-dynamics', xp: CASUAL_SOCIAL_XP, skills: [] }),
+    ]);
     expect(open.reasons).toContain('no_skill_goal');
+    expect(open.reasons).toContain('casual_tree_default');
 
     const partial = evaluateSocialXp(event({
       skillGoals: undefined,
@@ -311,6 +306,7 @@ describe('social XP rules', () => {
     }));
     expect(partial.mode).toBe('casual');
     expect(partial.casualXp).toBe(1);
+    expect(partial.awards[0].xp).toBe(1);
     expect(partial.casualXpWithheld).toBe(CASUAL_SOCIAL_XP - 1);
     expect(partial.reasons).toContain('weekly_cap');
 
@@ -362,26 +358,52 @@ describe('social XP rules', () => {
     );
   });
 
-  it('counts casual tags inside the America/Chicago week and ignores the rest', () => {
+  it('credits casual XP to the tree named by the activity, or the default tree', () => {
+    const dynamics = ['networking lunch', 'group workshop', 'rapport chat'];
+    for (const label of dynamics) {
+      const result = evaluateSocialXp(event({ skillGoals: [], reflection: null, label }));
+      expect(result.awards[0].className).toBe(SOCIAL_DYNAMICS_CLASS);
+      expect(result.reasons).toContain('casual_tree_inferred');
+      expect(result.totalXp).toBe(CASUAL_SOCIAL_XP);
+    }
+
+    const charisma = ['presence drill', 'storytelling night', 'humor set', 'speaking practice'];
+    for (const notes of charisma) {
+      const result = evaluateSocialXp(event({ skillGoals: [], reflection: null, notes }));
+      expect(result.awards[0].className).toBe(CHARISMA_CLASS);
+    }
+
+    const tie = evaluateSocialXp(event({
+      skillGoals: [],
+      reflection: null,
+      label: 'group',
+      notes: 'humor',
+    }));
+    expect(tie.awards[0].className).toBe(SOCIAL_DYNAMICS_CLASS);
+    expect(tie.reasons).toContain('casual_tree_default');
+  });
+
+  it('counts casual tags inside the America/Chicago week that starts Sunday', () => {
     const instant = new Date('2026-10-20T18:00:00.000Z');
     const week = chicagoWeekContaining(instant);
-    expect(week.startDate).toBe('2026-10-19');
-    expect(new Date(week.startMs).toISOString()).toBe('2026-10-19T05:00:00.000Z');
+    expect(week.startDate).toBe('2026-10-18');
+    expect(new Date(week.startMs).toISOString()).toBe('2026-10-18T05:00:00.000Z');
+    expect(new Date(week.endMs).toISOString()).toBe('2026-10-25T05:00:00.000Z');
     expect(week.endMs - week.startMs).toBe(7 * 24 * 60 * 60 * 1000);
 
     const rows: ActivityEntry[] = [
       {
         user_id: 'user-1',
-        class_name: 'Social',
+        class_name: 'Social Dynamics',
         activity_type: 'social',
-        logged_at: '2026-10-19T04:59:00.000Z',
+        logged_at: '2026-10-18T04:59:00.000Z',
         notes: '[social-xp:casual:2]',
       },
       {
         user_id: 'user-1',
-        class_name: 'Social',
+        class_name: 'Social Dynamics',
         activity_type: 'social',
-        logged_at: '2026-10-19T05:00:00.000Z',
+        logged_at: '2026-10-18T05:00:00.000Z',
         notes: 'Noted the room. [social-xp:casual:2]',
       },
       {
@@ -393,9 +415,9 @@ describe('social XP rules', () => {
       },
       {
         user_id: 'user-1',
-        class_name: 'Social',
+        class_name: 'Charisma',
         activity_type: 'social',
-        logged_at: '2026-10-26T05:00:00.000Z',
+        logged_at: '2026-10-25T05:00:00.000Z',
         notes: '[social-xp:casual:2]',
       },
     ];
