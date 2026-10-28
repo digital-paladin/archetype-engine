@@ -1,7 +1,8 @@
 import { Component, Input, OnChanges, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { HttpClient } from '@angular/common/http';
 import { environment } from '../environments/environment';
+import { WearableConnectService } from './wearable-connect.service';
+import { wearableProvider } from './wearable-providers';
 
 export interface SleepData {
   score: number;
@@ -857,8 +858,8 @@ export interface VitalsData {
   `],
 })
 export class SleepPanelComponent implements OnChanges {
-  private readonly http = inject(HttpClient);
-  readonly fitbitAuthUrl = `${environment.apiUrl}/api/fitbit/auth`;
+  private readonly wearables = inject(WearableConnectService);
+  readonly fitbitAuthUrl = `${environment.apiUrl}${wearableProvider('fitbit').connectPath}`;
 
   @Input() today: SleepData | null = null;
   @Input() week: SleepDayData[] | null = null;
@@ -870,41 +871,18 @@ export class SleepPanelComponent implements OnChanges {
   @Input() vitals: VitalsData | null = null;
 
   connectOura(): void {
-    this.http.get<{ success: boolean; url?: string; error?: string }>(
-      `${environment.apiUrl}/api/oura/connect-url`
-    ).subscribe({
-      next: (res) => {
-        if (res.success && res.url) {
-          window.location.href = res.url;
-        } else {
-          console.warn('[SleepPanel] Oura connect failed:', res.error);
-          alert(res.error || 'Oura is not configured yet.');
-        }
-      },
-      error: (err) => {
-        const msg = err?.error?.error || 'Could not start Oura authorization.';
-        console.warn('[SleepPanel] Oura connect error:', msg);
-        alert(msg);
-      },
-    });
+    this.startWearable('oura');
   }
 
   connectGoogleHealth(): void {
-    this.http.get<{ success: boolean; url?: string; error?: string }>(
-      `${environment.apiUrl}/api/google-health/connect-url`
-    ).subscribe({
-      next: (res) => {
-        if (res.success && res.url) {
-          window.location.href = res.url;
-        } else {
-          console.warn('[SleepPanel] Google Health connect failed:', res.error);
-          alert(res.error || 'Google Health is not configured yet.');
-        }
-      },
-      error: (err) => {
-        const msg = err?.error?.error || 'Could not start Google Health authorization.';
-        console.warn('[SleepPanel] Google Health connect error:', msg);
-        alert(msg);
+    this.startWearable('google');
+  }
+
+  private startWearable(id: string): void {
+    this.wearables.connect(id).subscribe({
+      error: (err: Error) => {
+        console.warn(`[SleepPanel] ${id} connect failed:`, err.message);
+        alert(err.message);
       },
     });
   }
