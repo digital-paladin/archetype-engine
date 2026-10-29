@@ -44,6 +44,39 @@ interface CharStatsResponse {
   overallLevelInfo?: OverallLevelInfo;
 }
 
+/** Latest smart-scale reading from GET /api/body-composition. Raw vendor fields; not XP. */
+interface ScaleReading {
+  source: string;
+  measuredAt: string;
+  fasted: boolean | null;
+  context: string | null;
+  notes: string | null;
+  healthScore: number | null;
+  healthScoreLabel: string | null;
+  healthScoreConfidencePct: number | null;
+  biologicalAgeYears: number | null;
+  metabolicAgeYears: number | null;
+  bodyFatPct: number | null;
+  bodyWaterPct: number | null;
+  skeletalMuscleMassLb: number | null;
+  weightLb: number | null;
+  bodyCompositionGrade: string | null;
+  activityGrade: string | null;
+  sleepGrade: string | null;
+  bodyFatLabel: string | null;
+  bodyWaterLabel: string | null;
+  skeletalMuscleMassLabel: string | null;
+  weightLabel: string | null;
+  biologicalAgeLabel: string | null;
+  metabolicAgeLabel: string | null;
+}
+
+interface CompositionRow {
+  testId: string;
+  label: string;
+  value: string;
+}
+
 const CLASS_ICONS: Record<string, string> = {
   developer:            '💻',
   sage:                 '🙏',
@@ -209,6 +242,20 @@ const TIER_CLASS: Record<string, string> = {
             <span class="cs-stat-lbl">{{ s.label }}</span>
             <span class="cs-stat-val" [ngClass]="s.cls">{{ s.value }}</span>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── COMPOSITION (latest scale reading, raw) ─────────────── -->
+    <div class="cs-section" *ngIf="latestReading() as reading" data-testid="body-composition">
+      <span class="cs-section-hdr">COMPOSITION</span>
+      <div class="cs-composition-meta" data-testid="composition-when" [attr.data-measured-at]="reading.measuredAt">
+        {{ reading.source }} · {{ reading.measuredAt | date:'medium' }}
+      </div>
+      <div class="cs-stat-col">
+        <div *ngFor="let row of compositionRows()" class="cs-stat-row" [attr.data-testid]="row.testId">
+          <span class="cs-stat-lbl">{{ row.label }}</span>
+          <span class="cs-stat-val">{{ row.value }}</span>
         </div>
       </div>
     </div>
@@ -450,6 +497,13 @@ const TIER_CLASS: Record<string, string> = {
       text-align: right;
     }
     .cs-tier-lbl { font-size: 8.5px; letter-spacing: 0.5px; text-transform: uppercase; }
+
+    .cs-composition-meta {
+      margin: 8px 0 4px;
+      font-size: 9px;
+      letter-spacing: 0.4px;
+      color: rgba(168,145,88,0.55);
+    }
   `],
 })
 export class CharacterStatsPanelComponent implements OnInit {
@@ -459,6 +513,8 @@ export class CharacterStatsPanelComponent implements OnInit {
   stats      = signal<CharStatsResponse | null>(null);
   classes    = signal<SkillTreeStat[]>([]);
   lifts      = signal<{ name: string; value: string; target?: string }[]>([]);
+  /** Latest scale reading. Hidden when the player has none. */
+  latestReading = signal<ScaleReading | null>(null);
 
   // ── Attribute allocation ─────────────────────────────────────────────────
   attributePoints  = signal<number>(3);
@@ -526,6 +582,8 @@ export class CharacterStatsPanelComponent implements OnInit {
     ];
   });
 
+  compositionRows = computed<CompositionRow[]>(() => compositionRowsFor(this.latestReading()));
+
   rightStats = computed<{ label: string; value: string; cls: string }[]>(() => [
     { label: 'Sage Streak',    value: (this.stats()?.sageStreak ?? 0) + 'd', cls: 'sv-streak'  },
     { label: 'Developer Lv',  value: String(this.classLevel('developer')),   cls: 'sv-dev'     },
@@ -549,6 +607,11 @@ export class CharacterStatsPanelComponent implements OnInit {
       error: () => {
         // finalize() already clears the loader; swallow so a 500 is not an unhandled rejection.
       },
+    });
+
+    this.http.get<{ readings?: ScaleReading[] }>(`${environment.apiUrl}/api/body-composition?limit=1`).subscribe({
+      next: (res) => this.latestReading.set(res.readings?.[0] ?? null),
+      error: () => this.latestReading.set(null),
     });
   }
 
@@ -605,4 +668,56 @@ export class CharacterStatsPanelComponent implements OnInit {
     if (attr === 'vitality') this.vitalityBon.update(n => n + 1);
     if (attr === 'energy')   this.energyBon.update(n => n + 1);
   }
+}
+
+function withVendorLabel(value: string, label: string | null): string {
+  return label ? `${value} · ${label}` : value;
+}
+
+/** Display rows for one reading. Units are the stored units. No ranges are computed. */
+function compositionRowsFor(reading: ScaleReading | null): CompositionRow[] {
+  if (!reading) return [];
+  const rows: CompositionRow[] = [];
+  const add = (testId: string, label: string, value: string | null) => {
+    if (value == null || value === '') return;
+    rows.push({ testId, label, value });
+  };
+
+  if (reading.healthScore != null) {
+    const bits = [String(reading.healthScore)];
+    if (reading.healthScoreLabel) bits.push(reading.healthScoreLabel);
+    if (reading.healthScoreConfidencePct != null) bits.push(`${reading.healthScoreConfidencePct}%`);
+    add('composition-health-score', 'Health score', bits.join(' · '));
+  }
+  if (reading.biologicalAgeYears != null) {
+    add('composition-biological-age', 'Biological age', withVendorLabel(`${reading.biologicalAgeYears} y`, reading.biologicalAgeLabel));
+  }
+  if (reading.metabolicAgeYears != null) {
+    add('composition-metabolic-age', 'Metabolic age', withVendorLabel(`${reading.metabolicAgeYears} y`, reading.metabolicAgeLabel));
+  }
+  if (reading.bodyFatPct != null) {
+    add('composition-body-fat', 'Body fat', withVendorLabel(`${reading.bodyFatPct}%`, reading.bodyFatLabel));
+  }
+  if (reading.bodyWaterPct != null) {
+    add('composition-body-water', 'Body water', withVendorLabel(`${reading.bodyWaterPct}%`, reading.bodyWaterLabel));
+  }
+  if (reading.skeletalMuscleMassLb != null) {
+    add('composition-muscle', 'Skeletal muscle', withVendorLabel(`${reading.skeletalMuscleMassLb} lb`, reading.skeletalMuscleMassLabel));
+  }
+  if (reading.weightLb != null) {
+    add('composition-weight', 'Weight', withVendorLabel(`${reading.weightLb} lb`, reading.weightLabel));
+  }
+
+  const grades = [
+    reading.bodyCompositionGrade ? `Body ${reading.bodyCompositionGrade}` : '',
+    reading.activityGrade ? `Activity ${reading.activityGrade}` : '',
+    reading.sleepGrade ? `Sleep ${reading.sleepGrade}` : '',
+  ].filter(part => part !== '').join(' · ');
+  add('composition-grades', 'Grades', grades || null);
+
+  if (reading.fasted === true) add('composition-fasted', 'Fasted', 'Yes');
+  if (reading.fasted === false) add('composition-fasted', 'Fasted', 'No');
+  add('composition-context', 'Context', reading.context);
+  add('composition-notes', 'Notes', reading.notes);
+  return rows;
 }

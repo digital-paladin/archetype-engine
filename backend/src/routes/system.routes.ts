@@ -18,6 +18,8 @@ import {
   updateQuestProgress,
 } from '../services/systemQuest.service';
 import { ConsumptionError, logConsumption } from '../services/consumption.service';
+import { BodyCompositionError } from '../domain/bodyComposition';
+import { listBodyComposition, logBodyComposition } from '../services/bodyComposition.service';
 
 const router = Router();
 
@@ -44,6 +46,14 @@ function sendError(res: Response, err: unknown): void {
     error: 'internal',
     message: err instanceof Error ? err.message : 'Unknown error',
   });
+}
+
+function sendBodyCompositionError(res: Response, err: unknown): boolean {
+  if (err instanceof BodyCompositionError) {
+    res.status(err.status).json({ success: false, error: err.code, message: err.message });
+    return true;
+  }
+  return false;
 }
 
 function requirePlayer(authKind: 'user' | 'service'): void {
@@ -163,6 +173,29 @@ router.post('/messages', async (req: Request, res: Response) => {
     const result = await postSystemMessage(userId, req.body ?? {}, authKind);
     res.status(result.idempotentReplay ? 200 : 201).json({ success: true, ...result });
   } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.post('/body-composition', async (req: Request, res: Response) => {
+  try {
+    const { userId } = authOf(req);
+    // Raw scale values only. req.body.xp is ignored; a reading does not award XP.
+    const result = await logBodyComposition(userId, req.body ?? {});
+    res.status(result.idempotentReplay ? 200 : 201).json({ success: true, ...result });
+  } catch (err) {
+    if (sendBodyCompositionError(res, err)) return;
+    sendError(res, err);
+  }
+});
+
+router.get('/body-composition', async (req: Request, res: Response) => {
+  try {
+    const { userId } = authOf(req);
+    const readings = await listBodyComposition(userId, req.query.limit);
+    res.json({ success: true, readings });
+  } catch (err) {
+    if (sendBodyCompositionError(res, err)) return;
     sendError(res, err);
   }
 });
