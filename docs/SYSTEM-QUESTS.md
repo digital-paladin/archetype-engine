@@ -15,7 +15,9 @@ Apply the migration to that same Supabase project before the bot calls the API. 
 
 That creates `system_quests`, `system_messages`, and `service_credentials` (RLS on, service role bypasses it).
 
-Quest corrections (`PATCH /api/system/quests/:id`) need a second migration, [`011_system_quest_edits.sql`](../supabase/migrations/011_system_quest_edits.sql). It adds `system_quests.edits`. Railway auto-deploys the backend from `main` and does **not** run SQL, so apply `011` in the Supabase SQL editor (or with `apply-migration.js`) before the bot calls the correction route. Create, progress, clear, and fail keep working if `011` is not applied yet; the correction route will fail until the column exists. The frontend on Vercel does not need a database change.
+Quest corrections (`PATCH /api/system/quests/:id`) need a second migration, [`011_system_quest_edits.sql`](../supabase/migrations/011_system_quest_edits.sql). It adds `system_quests.edits`. Railway auto-deploys the backend from `main` and does **not** run SQL, so apply `011` in the Supabase SQL editor (or with `apply-migration.js`) before the bot calls the correction route. Create, progress, clear, and fail keep working if `011` is not applied yet; the correction route will fail until the column exists.
+
+Acquisition quests and database inventory need [`014_acquisition_quests_and_inventory.sql`](../supabase/migrations/014_acquisition_quests_and_inventory.sql). It adds the `acquisition` kind, the cents columns, `inventory_items`, and the seeded catalog. Apply it before those routes are used. The frontend inventory panel reads `GET /api/inventory` and is empty until this migration has been applied.
 
 Alternatively, from a machine that has `DATABASE_URL` in `backend/.env`:
 
@@ -66,7 +68,8 @@ Base URL is the backend origin. Send `Authorization: Bearer <token>` on every ca
 | `POST` | `/api/system/quests` | player or service | Create. `201` the first time, `200` with `idempotentReplay: true` when `idempotencyKey` repeats. |
 | `GET` | `/api/system/quests?status=active` | player or service | List. Runs expiry first. Hidden quests are masked unless `includeHidden=true`. |
 | `GET` | `/api/system/quests/:id` | player or service | One quest. Same masking. |
-| `PATCH` | `/api/system/quests/:id/progress` | player or service | `{ objectiveId, progress?, done? }` on an **active** quest. |
+| `PATCH` | `/api/system/quests/:id/progress` | player or service | `{ objectiveId, progress?, done? }` on an **active** quest. Acquisition milestones pay their stored XP once here. |
+| `PATCH` | `/api/system/quests/:id/budget` | player or service | Acquisition only. `{ targetCostCents?, amountSavedCents?, inventoryItemId? }` updates the money tracker. Response `xpApplied` is always `[]`. |
 | `PATCH` | `/api/system/quests/:id` | player or service | Correct an **active** quest. See below. |
 | `POST` | `/api/system/quests/:id/clear` | player or service | Status `cleared`. XP comes from the stored `xpReward` only. Second call does not pay again. |
 | `POST` | `/api/system/quests/:id/fail` | player or service | Status `failed`. Subtracts `penalty.xpPenalty` once and creates `penalty.penaltyQuest` if present. |
@@ -109,7 +112,68 @@ XP is applied with the same `character_stats` path as `POST /api/activities` (`X
 }
 ```
 
-`kind` is `daily`, `emergency`, `hidden`, or `penalty`.
+`kind` is `daily`, `emergency`, `hidden`, `penalty`, or `acquisition`.
+
+### Acquisition quests
+
+`acquisition` is a long-term real-world goal (buying gear, a certification, a camping kit). It stays active until it is cleared or failed. A `deadline`, if you send one, is only a target date: the minute sweeper does **not** expire acquisition quests.
+
+Money is bookkeeping, in integer USD cents:
+
+- `targetCostCents` — what the goal costs
+- `amountSavedCents` — how much is set aside so far
+
+`PATCH /api/system/quests/:id/budget` changes those fields. It never awards XP. `budgetGrantsXp` on an acquisition quest is always `false`. Sending `xp` or `xpReward` on that route is `400`.
+
+XP is paid for milestone progress. Put a class map on the objective (`objectives[].xpReward`). The server pays it **once**, when that objective first becomes done, through `PATCH …/progress`. The amount is the map you stored. It is not `progress`, not `target`, and not the cents saved. Quest-level `xpReward` is an optional completion bonus paid once on clear (the same rule as other kinds). An acquisition quest must have milestone XP, a completion bonus, or both. Dollars alone are rejected.
+
+`inventoryItemId` (the row uuid) or `inventoryItemSlug` links the quest to a row in `inventory_items`. A System caller can instead send `inventoryItem` (the same body as `POST /api/inventory`) and the quest route creates the row, or reuses it when that slug already exists. Service credentials cannot call `/api/inventory`; inline `inventoryItem` keeps the create inside `/api/system`. Clearing the quest sets that item's `stockStatus` to `stocked`. Failing does not. The item link can be any category; tech-hardware is the usual one for a PC build.
+
+Inventory itself is no longer hardcoded in the frontend. Migration `014_acquisition_quests_and_inventory.sql` seeds `inventory_item_defaults` with the previous catalog (Burp Suite Pro, OSCP, the survivalist camping pieces, armor, and the rest). `GET /api/inventory` copies any slug the player does not already have. `POST /api/inventory` creates a new item; the response `rowId` is what `inventoryItemId` stores. `id` on the item stays the slug so equip toggles keep working.
+
+Apply [`014_acquisition_quests_and_inventory.sql`](../supabase/migrations/014_acquisition_quests_and_inventory.sql) before the bot creates an acquisition quest or the inventory panel loads from the API. Daily quests still insert if `014` is not applied yet, because those writes omit the new columns. The acquisition route will fail until the columns and `inventory_items` exist.
+
+RTX 3090 rig, local AI build. The target is $1,800 (`180000` cents). Saving toward it does not pay XP. Each milestone has its own flat reward. There is no completion bonus in this example, so clear stocks the item and pays nothing more:
+
+```json
+{
+  "idempotencyKey": "acquisition:rtx-3090-rig",
+  "kind": "acquisition",
+  "title": "RTX 3090 PC rig",
+  "description": "Local AI build. Money tracked on this quest is not experience.",
+  "targetCostCents": 180000,
+  "amountSavedCents": 0,
+  "inventoryItem": {
+    "id": "rtx-3090-rig",
+    "name": "RTX 3090 PC rig",
+    "type": "equipment",
+    "category": "tech-hardware",
+    "icon": "🖥️",
+    "unit": "rig",
+    "description": "Local AI build.",
+    "stockStatus": "needed",
+    "priority": "HIGH"
+  },
+  "objectives": [
+    { "id": "save-target", "label": "Savings goal reached", "target": 1, "xpReward": { "Financial Strategist": 25 } },
+    { "id": "purchase-gpu", "label": "Purchase the RTX 3090", "target": 1, "xpReward": { "Developer": 40 } },
+    { "id": "build", "label": "Assemble the rig", "target": 1, "xpReward": { "Developer": 60 } },
+    { "id": "software", "label": "Bring up the local AI software", "target": 1, "xpReward": { "Developer": 80, "Sage": 20 } }
+  ],
+  "xpReward": {}
+}
+```
+
+Mark "Savings goal reached" done only when the save is real — updating `amountSavedCents` to `180000` does not complete that objective and does not pay the 25 XP. Clear, after the milestones you actually finished, sets the rig to `stocked`. A player session can also create the item ahead of time with `POST /api/inventory` and pass `inventoryItemSlug` or `inventoryItemId` instead of `inventoryItem`.
+
+```bash
+curl -X PATCH "$API/api/system/quests/$QUEST_ID/budget" \
+  -H "Authorization: Bearer $ARCHETYPE_SYSTEM_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"amountSavedCents":45000}'
+```
+
+The service credential may update the budget. It still cannot approve a money reward (`reward-approval` stays player-only). A budget update is not a purchase approval.
 
 `xpReward` and `xpPenalty` values are non-negative integers. The server decides the sign. A clear body like `{ "xp": 99999 }` is ignored.
 

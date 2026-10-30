@@ -81,6 +81,42 @@ const QUESTS = [
     resolution: { outcome: 'cleared', xpPlanned: [{ className: 'Sage', xp: 25 }] },
     resolvedAt: new Date().toISOString(),
   },
+  {
+    id: 'q4',
+    kind: 'acquisition',
+    status: 'active',
+    hidden: false,
+    revealed: true,
+    source: 'user',
+    createdAt: new Date().toISOString(),
+    deadline: null,
+    title: 'RTX 3090 PC rig',
+    description: 'Local AI build.',
+    objectives: [
+      { id: 'purchase-gpu', label: 'Purchase the RTX 3090', target: 1, progress: 0, done: false, xpReward: { Developer: 40 } },
+    ],
+    xpReward: {},
+    rewardNote: null,
+    rewardCostsMoney: false,
+    rewardApproval: 'not_required',
+    penalty: null,
+    training: false,
+    thursdayTrainingFlag: false,
+    recoveryType: null,
+    resolution: null,
+    resolvedAt: null,
+    targetCostCents: 180000,
+    amountSavedCents: 45000,
+    inventoryItemId: 'row-1',
+    budgetGrantsXp: false,
+    linkedItem: {
+      id: 'row-1',
+      slug: 'rtx-3090-rig',
+      name: 'RTX 3090 PC rig',
+      category: 'tech-hardware',
+      stockStatus: 'needed',
+    },
+  },
 ];
 
 describe('formatCountdown', () => {
@@ -142,10 +178,18 @@ describe('System window', () => {
     const clocks = fixture.nativeElement.querySelectorAll('[data-testid="system-countdown"]');
     expect(clocks.length).toBeGreaterThan(0);
     expect(clocks[0].textContent).toMatch(/\d\d:\d\d:\d\d/);
-    expect(fixture.nativeElement.querySelector('[data-testid="system-active-count"]').textContent).toContain('2 active');
+    expect(fixture.nativeElement.querySelector('[data-testid="system-active-count"]').textContent).toContain('3 active');
+    const budget = fixture.nativeElement.querySelector('[data-testid="acquisition-budget"]');
+    expect(budget.textContent).toContain('$450.00 saved of $1,800.00');
+    expect(budget.textContent).toContain('does not grant XP');
+    expect(budget.textContent.toLowerCase()).not.toContain('developer');
+    expect(fixture.nativeElement.querySelector('[data-testid="acquisition-item"]').textContent).toContain('RTX 3090 PC rig');
+    expect(fixture.nativeElement.querySelector('[data-kind="acquisition"] [data-testid="system-countdown"]').textContent)
+      .toContain('Open-ended');
+    expect(fixture.nativeElement.textContent).toContain('+40 Developer');
     expect(fixture.nativeElement.textContent).toContain('Read one chapter');
     expect(fixture.nativeElement.textContent).toContain('+25 Sage');
-    expect(TestBed.inject(SystemQuestService).activeCount()).toBe(2);
+    expect(TestBed.inject(SystemQuestService).activeCount()).toBe(3);
   });
 
   it('asks the player to approve a money reward and does not send XP', () => {

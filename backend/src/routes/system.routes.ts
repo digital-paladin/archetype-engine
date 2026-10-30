@@ -15,6 +15,7 @@ import {
   postSystemMessage,
   revealSystemQuest,
   resolveSystemQuest,
+  updateAcquisitionBudget,
   updateQuestProgress,
 } from '../services/systemQuest.service';
 import { ConsumptionError, logConsumption } from '../services/consumption.service';
@@ -99,8 +100,18 @@ router.get('/quests/:id', async (req: Request, res: Response) => {
 router.patch('/quests/:id/progress', async (req: Request, res: Response) => {
   try {
     const { userId } = authOf(req);
-    const quest = await updateQuestProgress(userId, req.params.id, req.body ?? {});
-    res.json({ success: true, quest });
+    const result = await updateQuestProgress(userId, req.params.id, req.body ?? {});
+    res.json({ success: true, ...result });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.patch('/quests/:id/budget', async (req: Request, res: Response) => {
+  try {
+    const { userId } = authOf(req);
+    const quest = await updateAcquisitionBudget(userId, req.params.id, req.body ?? {});
+    res.json({ success: true, quest, xpApplied: [] });
   } catch (err) {
     sendError(res, err);
   }
