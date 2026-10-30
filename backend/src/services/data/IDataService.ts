@@ -12,6 +12,50 @@ export interface CharacterStats {
   updated_at?: string;
 }
 
+/** One logged food or drink. `id` is assigned on create, or on the first list of a legacy row. */
+export interface FoodLogEdit {
+  idempotencyKey: string | null;
+  at: string;
+  source: 'user' | 'service';
+  reason: string | null;
+  changes: string[];
+  previous: Record<string, unknown>;
+}
+
+export interface FoodLogItem {
+  id?: string;
+  item: string;
+  protein: number;
+  calories: number;
+  ts: string;
+  waterOz?: number;
+  caffeineMg?: number;
+  /** Added sugars only. This is what flags the entry and feeds Sugar Rush. */
+  addedSugarG?: number;
+  /**
+   * Total sugar from a label, including sugars that are not added.
+   * Stored for the record. It does not flag the entry and does not create Sugar Rush.
+   */
+  totalSugarG?: number;
+  alcohol?: { volumeOz: number; abvPercent: number };
+  supplements?: Array<{ key: string; amount: number; unit?: string }>;
+  notes?: string;
+  buffValue?: string;
+  dietFlags?: string[];
+  editedAt?: string;
+  edits?: FoodLogEdit[];
+}
+
+/** One journal day that has a food log. Used to find a consumption id without a new table. */
+export interface JournalFoodDay {
+  entry_date: string;
+  food_log: FoodLogItem[];
+  protein_grams_logged?: number | null;
+  meal_count?: number | null;
+  hydration_oz?: number | null;
+  sleep_start?: string | null;
+}
+
 export interface JournalEntry {
   id?: string;
   user_id: string;
@@ -33,17 +77,7 @@ export interface JournalEntry {
   protein_level?: 'low' | 'medium' | 'high';
   protein_grams_logged?: number;
   meal_count?: number;
-  food_log?: Array<{
-    item: string;
-    protein: number;
-    calories: number;
-    ts: string;
-    waterOz?: number;
-    caffeineMg?: number;
-    addedSugarG?: number;
-    alcohol?: { volumeOz: number; abvPercent: number };
-    supplements?: Array<{ key: string; amount: number; unit?: string }>;
-  }>;
+  food_log?: FoodLogItem[];
   food_quality?: 'poor' | 'mixed' | 'mixed/good' | 'good' | 'excellent';
   calories_status?: 'deficit' | 'maintenance' | 'surplus';
   stress_level?: 'low' | 'medium' | 'high';
@@ -201,6 +235,8 @@ export interface IDataService {
   // ── Journal ────────────────────────────────────────────────────────────
   getJournalEntry(userId: string, date: string): Promise<JournalEntry | null>;
   upsertJournalEntry(userId: string, entry: Partial<JournalEntry>): Promise<void>;
+  /** Days that have a food_log, newest first. One query; corrections scan this to resolve an id. */
+  listJournalFoodDays(userId: string): Promise<JournalFoodDay[]>;
   listJournalSleepRange(userId: string, fromDate: string, toDate: string): Promise<Array<{ date: string; hours: number; score: number }>>;
 
   // ── ACM ────────────────────────────────────────────────────────────────

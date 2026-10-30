@@ -3,7 +3,7 @@ import { getSupabaseAdmin } from '../../lib/supabase';
 import {
   IDataService,
   CharacterStats, XPHistoryEntry,
-  JournalEntry, ACMEntry, QuestEntry,
+  JournalEntry, JournalFoodDay, FoodLogItem, ACMEntry, QuestEntry,
   ActivityEntry, VaultItem, FitbitTokens, WearableTokenRow,
   SpendingEntry, TreasurySettings,
   CharacterProfile,
@@ -75,6 +75,31 @@ export class SupabaseDataService implements IDataService {
       .upsert({ ...entry, user_id: userId },
                { onConflict: 'user_id,entry_date' });
     if (error) throw error;
+  }
+
+  async listJournalFoodDays(userId: string): Promise<JournalFoodDay[]> {
+    const { data, error } = await this.db
+      .from('daily_journal_entries')
+      .select('entry_date, food_log, protein_grams_logged, meal_count, hydration_oz, sleep_start')
+      .eq('user_id', userId)
+      .not('food_log', 'is', null)
+      .order('entry_date', { ascending: false });
+    if (error) throw error;
+    return (data ?? []).map((row: {
+      entry_date: string;
+      food_log: FoodLogItem[] | null;
+      protein_grams_logged: number | null;
+      meal_count: number | null;
+      hydration_oz: number | null;
+      sleep_start: string | null;
+    }) => ({
+      entry_date: String(row.entry_date).slice(0, 10),
+      food_log: Array.isArray(row.food_log) ? row.food_log : [],
+      protein_grams_logged: row.protein_grams_logged,
+      meal_count: row.meal_count,
+      hydration_oz: row.hydration_oz,
+      sleep_start: row.sleep_start,
+    }));
   }
 
   async listJournalSleepRange(
