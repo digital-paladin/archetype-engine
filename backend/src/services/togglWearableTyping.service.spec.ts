@@ -130,6 +130,80 @@ describe('togglOverridesForSportSessions', () => {
     }]);
   });
 
+  it('types Sport from the description when the project name does not map', () => {
+    const overrides = togglOverridesForSportSessions('2026-10-13', [sport], [], [
+      entry({
+        id: 'sambo',
+        description: 'sambo',
+        projectName: 'Warrior',
+        start: '2026-10-13T23:00:00Z',
+        stop: '2026-10-13T23:50:00Z',
+        duration: 3000,
+      }),
+    ], NOW);
+    expect(overrides).toEqual([{
+      sourceId: '111',
+      startTime: '18:03',
+      activityType: 'workout-mma',
+      label: 'Toggl: Sambo',
+    }]);
+  });
+
+  it('types Sport from a description when the entry has no project', () => {
+    const overrides = togglOverridesForSportSessions('2026-10-13', [sport], [], [
+      entry({
+        id: 'ftw',
+        description: 'FtWorth Combatives - Sambo',
+        projectName: null,
+        start: '2026-10-13T23:00:00Z',
+        stop: '2026-10-13T23:50:00Z',
+        duration: 3000,
+      }),
+    ], NOW);
+    expect(overrides).toEqual([{
+      sourceId: '111',
+      startTime: '18:03',
+      activityType: 'workout-mma',
+      label: 'Toggl: Sambo',
+    }]);
+  });
+
+  it('keeps cardio for a parkour description', () => {
+    const overrides = togglOverridesForSportSessions('2026-10-13', [sport], [], [
+      entry({
+        id: 'parkour',
+        description: 'parkour',
+        projectName: 'Warrior',
+        start: '2026-10-13T23:00:00Z',
+        stop: '2026-10-13T23:50:00Z',
+        duration: 3000,
+      }),
+    ], NOW);
+    expect(overrides).toEqual([]);
+  });
+
+  it('on an equal overlap, prefers an entry that maps only by description', () => {
+    const overrides = togglOverridesForSportSessions('2026-10-13', [sport], [], [
+      entry({
+        id: 'a-email',
+        description: 'inbox',
+        projectName: 'Email',
+        start: '2026-10-13T23:03:00Z',
+        stop: '2026-10-13T23:48:00Z',
+        duration: 45 * 60,
+      }),
+      entry({
+        id: 'z-sambo',
+        description: 'sambo',
+        projectName: 'Warrior',
+        start: '2026-10-13T23:03:00Z',
+        stop: '2026-10-13T23:48:00Z',
+        duration: 45 * 60,
+      }),
+    ], NOW);
+    expect(overrides[0]).toMatchObject({ activityType: 'workout-mma', label: 'Toggl: Sambo' });
+  });
+
   it('on an equal overlap, prefers the entry that maps', () => {
     const overrides = togglOverridesForSportSessions('2026-10-13', [sport], [], [
       entry({
