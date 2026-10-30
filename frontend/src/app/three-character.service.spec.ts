@@ -169,6 +169,112 @@ describe('getBodyPartScreenPosition', () => {
   });
 });
 
+describe('full-body framing', () => {
+  function projectY(camera: THREE.PerspectiveCamera, y: number): number {
+    camera.updateMatrixWorld(true);
+    const ndc = new THREE.Vector3(0.12, y, 0.08).project(camera);
+    return (1 - ndc.y) / 2 * 100;
+  }
+
+  it('keeps feet and the head inside the default frame', () => {
+    const camera = new THREE.PerspectiveCamera(45, 0.55, 0.1, 1000);
+    const svc = new ThreeCharacterService();
+    (svc as any).camera = camera;
+    svc.resetView();
+
+    const foot = projectY(camera, 0.02);
+    const head = projectY(camera, 1.75);
+    // Feet stay in the lower third with margin under them; the head stays in frame.
+    expect(foot).toBeGreaterThan(60);
+    expect(foot).toBeLessThan(76);
+    expect(head).toBeGreaterThan(12);
+    expect(head).toBeLessThan(34);
+    expect(head).toBeLessThan(foot);
+  });
+
+  it('orbits, dollies, and clamps zoom around the full-body target', () => {
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
+    const svc = new ThreeCharacterService();
+    (svc as any).camera = camera;
+    svc.resetView();
+    const target = new THREE.Vector3(0, 0.7, 0);
+    const start = camera.position.clone();
+
+    svc.orbitBy(0.5, 0);
+    expect(camera.position.distanceTo(start)).toBeGreaterThan(0.2);
+
+    const radius = camera.position.distanceTo(target);
+    svc.dolly(-0.4);
+    expect(camera.position.distanceTo(target)).toBeLessThan(radius - 0.2);
+
+    for (let i = 0; i < 40; i++) svc.dolly(-1);
+    expect(camera.position.distanceTo(target)).toBeGreaterThan(1.5);
+    expect(camera.position.distanceTo(target)).toBeLessThan(1.7);
+
+    svc.resetView();
+    expect(camera.position.x).toBeCloseTo(0, 5);
+    expect(camera.position.y).toBeCloseTo(0.78, 5);
+    expect(camera.position.z).toBeCloseTo(4.4, 5);
+  });
+});
+
+describe('pickBodyPartFromNdc', () => {
+  function framedService(character: THREE.Group): ThreeCharacterService {
+    const camera = new THREE.PerspectiveCamera(45, 0.55, 0.1, 1000);
+    const svc = makeService(character, camera);
+    svc.resetView();
+    camera.updateMatrixWorld(true);
+    character.updateMatrixWorld(true);
+    return svc;
+  }
+
+  it('picks the foot when the ray hits the foot mesh', () => {
+    const character = makeFakeCharacter({
+      RightToeBase: new THREE.Vector3(0.15, 0.02, 0),
+      LeftToeBase: new THREE.Vector3(-0.15, 0.02, 0),
+      Head: new THREE.Vector3(0, 1.7, 0),
+    });
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.12, 0.3), new THREE.MeshBasicMaterial());
+    mesh.position.set(0.15, 0.05, 0);
+    character.add(mesh);
+    const svc = framedService(character);
+
+    const ndc = new THREE.Vector3(0.15, 0.05, 0).project((svc as any).camera);
+    expect(svc.pickBodyPartFromNdc(ndc.x, ndc.y)).toBe('right-foot');
+  });
+
+  it('prefers chest from the front and upper back when the camera is behind', () => {
+    const character = makeFakeCharacter({ Spine2: new THREE.Vector3(0, 1.3, 0) });
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, 0.4), new THREE.MeshBasicMaterial());
+    mesh.position.set(0, 1.3, 0);
+    character.add(mesh);
+    const svc = framedService(character);
+    const camera = (svc as any).camera as THREE.PerspectiveCamera;
+
+    const front = new THREE.Vector3(0, 1.3, 0).project(camera);
+    expect(svc.pickBodyPartFromNdc(front.x, front.y)).toBe('chest');
+
+    camera.position.set(0, 0.95, -3.8);
+    camera.lookAt(0, 0.9, 0);
+    camera.updateMatrixWorld(true);
+    const back = new THREE.Vector3(0, 1.3, 0).project(camera);
+    expect(svc.pickBodyPartFromNdc(back.x, back.y)).toBe('back-upper');
+  });
+
+  it('falls back to the nearest on-screen anchor when the ray misses, and ignores empty space', () => {
+    const character = makeFakeCharacter({
+      RightToeBase: new THREE.Vector3(0.15, 0.02, 0),
+      Head: new THREE.Vector3(0, 1.7, 0),
+    });
+    const svc = framedService(character);
+    const camera = (svc as any).camera as THREE.PerspectiveCamera;
+    const footNdc = new THREE.Vector3(0.15, 0.02, 0).project(camera);
+
+    expect(svc.pickBodyPartFromNdc(footNdc.x + 0.04, footNdc.y)).toBe('right-foot');
+    expect(svc.pickBodyPartFromNdc(-0.95, 0.95)).toBeNull();
+  });
+});
+
 describe('onFrame / offFrame', () => {
   it('registers a callback that can later be removed', () => {
     const svc = new ThreeCharacterService();

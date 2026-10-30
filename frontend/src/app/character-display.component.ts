@@ -1,19 +1,26 @@
-import { Component, OnInit, OnDestroy, ViewChild, ElementRef, AfterViewInit, Input, Output, EventEmitter } from '@angular/core';
+import { Component, OnInit, OnDestroy, ViewChild, ElementRef, AfterViewInit, Input, Output, EventEmitter, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Subscription } from 'rxjs';
 import { ThreeCharacterService, ActivityAnimation } from './three-character.service';
 import { ActionTrackerService, ActiveAction } from './action-tracker.service';
 import { ActionTrackerComponent } from './action-tracker.component';
 import { BodyStatusService } from './body-status.service';
-import { BodyStatus } from './body-status.interface';
+import { BodyPart, BodyStatus } from './body-status.interface';
+import { BodyStatusModalComponent } from './body-status-modal.component';
 
 @Component({
   selector: 'app-character-display',
   standalone: true,
-  imports: [CommonModule, ActionTrackerComponent],
+  imports: [CommonModule, ActionTrackerComponent, BodyStatusModalComponent],
   template: `
     <div class="character-container">
-      <canvas #canvas class="character-canvas"></canvas>
+      <canvas #canvas class="character-canvas"
+        aria-label="Character model. Tap a body region to log a condition. Drag to orbit."
+        (pointerdown)="onCanvasPointerDown($event)"
+        (pointermove)="onCanvasPointerMove($event)"
+        (pointerup)="onCanvasPointerUp($event)"
+        (pointercancel)="onCanvasPointerCancel($event)">
+      </canvas>
       
       <!-- Action Tracker Overlay -->
       <app-action-tracker
@@ -52,25 +59,34 @@ import { BodyStatus } from './body-status.interface';
       <!-- Body Status Markers — pulsing dots pointing at active injuries/illness on the 3D model -->
       <div class="body-status-markers">
         <div
-          *ngFor="let marker of bodyStatusMarkers"
+          *ngFor="let marker of bodyStatusMarkers(); trackBy: trackMarker"
           class="body-status-marker"
           [style.left.%]="marker.xPct"
           [style.top.%]="marker.yPct"
           [style.background]="marker.color"
           [style.boxShadow]="'0 0 8px ' + marker.color"
           [title]="marker.name + ' (' + marker.severity + ')'"
-          (click)="onMarkerClick(marker)">
+          (click)="onMarkerClick(marker, $event)">
         </div>
       </div>
 
-      <!-- Activity Start Buttons removed — logging via Quest Activities and ACL -->
+      <div class="character-view-controls">
+        <button type="button" class="view-btn" (click)="zoomIn()" title="Zoom in">+</button>
+        <button type="button" class="view-btn" (click)="zoomOut()" title="Zoom out">−</button>
+        <button type="button" class="view-btn" (click)="resetCamera()" title="Reset full-body view">Reset</button>
+      </div>
+      <div class="character-log-hint">Tap a body region to log · drag to orbit</div>
+
+      <app-body-status-modal></app-body-status-modal>
     </div>
   `,
   styles: [`
     .character-container {
       position: relative;
       width: 100%;
-      height: 500px;
+      /* Short enough that a full-body frame, including the feet, fits under the
+         status panel on a typical laptop. Taller windows get a larger view. */
+      height: clamp(340px, calc(100vh - 680px), 520px);
       background: transparent;
       overflow: hidden;
     }
@@ -79,6 +95,8 @@ import { BodyStatus } from './body-status.interface';
       width: 100%;
       height: 100%;
       display: block;
+      touch-action: none;
+      cursor: crosshair;
     }
 
     .character-info {
@@ -268,14 +286,60 @@ import { BodyStatus } from './body-status.interface';
 
     .body-status-marker {
       position: absolute;
-      width: 14px;
-      height: 14px;
+      width: 18px;
+      height: 18px;
       border-radius: 50%;
       border: 2px solid rgba(255, 255, 255, 0.85);
       transform: translate(-50%, -50%);
       cursor: pointer;
       pointer-events: auto;
       animation: body-status-pulse 1.6s ease-in-out infinite;
+    }
+
+    .body-status-marker::after {
+      content: '';
+      position: absolute;
+      inset: -10px;
+    }
+
+    .character-view-controls {
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      display: flex;
+      gap: 4px;
+      z-index: 2;
+    }
+
+    .view-btn {
+      background: rgba(6, 4, 2, 0.85);
+      color: var(--eso-gold, #c9a84c);
+      border: 1px solid var(--eso-gold-dim, #6a5020);
+      font-family: 'Cinzel', serif;
+      font-size: 11px;
+      letter-spacing: 0.5px;
+      min-width: 32px;
+      padding: 4px 8px;
+      cursor: pointer;
+    }
+
+    .view-btn:hover {
+      border-color: var(--eso-gold, #c9a84c);
+      color: var(--eso-gold-bright, #f2c96a);
+    }
+
+    .character-log-hint {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 8px;
+      text-align: center;
+      font-size: 10px;
+      letter-spacing: 0.4px;
+      color: var(--eso-text-dim, #a08858);
+      font-family: 'Cinzel', serif;
+      pointer-events: none;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
     }
 
     @keyframes body-status-pulse {
@@ -296,8 +360,12 @@ export class CharacterDisplayComponent implements OnInit, AfterViewInit, OnDestr
   /** Emits the clicked status's id — dashboard switches to the Health panel and pre-selects it. */
   @Output() bodyStatusMarkerClicked = new EventEmitter<string>();
 
+  @ViewChild(BodyStatusModalComponent) bodyStatusModal?: BodyStatusModalComponent;
+
   floatingTexts: Array<{ text: string; x: number; y: number; size: string; id: number }> = [];
-  bodyStatusMarkers: Array<{ id: string; xPct: number; yPct: number; color: string; name: string; severity: string }> = [];
+  /** Signal so marker positions painted from the render loop update under zoneless change detection. */
+  bodyStatusMarkers = signal<Array<{ id: string; xPct: number; yPct: number; color: string; name: string; severity: string }>>([]);
+  private markerLayoutKey = '';
   private textIdCounter = 0;
   private modelLoaded = false;
   private currentAnimation: string | null = null;
@@ -308,6 +376,13 @@ export class CharacterDisplayComponent implements OnInit, AfterViewInit, OnDestr
   private boundRecomputeMarkers!: () => void;
   private activeBodyStatuses: BodyStatus[] = [];
   private bodyStatusSubscription: Subscription | null = null;
+  private canvasEl: HTMLCanvasElement | null = null;
+  private pointerSession: { id: number; x: number; y: number; lastX: number; lastY: number; moved: boolean } | null = null;
+  private readonly onCanvasWheel = (event: WheelEvent): void => {
+    event.preventDefault();
+    const delta = Math.max(-1, Math.min(1, event.deltaY / 100));
+    this.threeService.dolly(delta * 0.45);
+  };
 
   constructor(
     private threeService: ThreeCharacterService,
@@ -328,6 +403,8 @@ export class CharacterDisplayComponent implements OnInit, AfterViewInit, OnDestr
 
   ngAfterViewInit(): void {
     const canvas = this.canvasRef.nativeElement;
+    this.canvasEl = canvas;
+    canvas.addEventListener('wheel', this.onCanvasWheel, { passive: false });
     this.threeService.initScene(canvas);
 
     // ResizeObserver fires immediately on first observe (fixes init-time mismatch)
@@ -376,6 +453,7 @@ export class CharacterDisplayComponent implements OnInit, AfterViewInit, OnDestr
   }
 
   ngOnDestroy(): void {
+    this.canvasEl?.removeEventListener('wheel', this.onCanvasWheel);
     this.resizeObserver?.disconnect();
     if (this.boundRecomputeMarkers) this.threeService.offFrame(this.boundRecomputeMarkers);
     this.bodyStatusSubscription?.unsubscribe();
@@ -387,7 +465,10 @@ export class CharacterDisplayComponent implements OnInit, AfterViewInit, OnDestr
   /** Recomputes screen-space marker positions for all active body statuses (called once per render-loop tick). */
   private recomputeBodyStatusMarkers(): void {
     if (this.activeBodyStatuses.length === 0) {
-      if (this.bodyStatusMarkers.length > 0) this.bodyStatusMarkers = [];
+      if (this.bodyStatusMarkers().length > 0) {
+        this.markerLayoutKey = '';
+        this.bodyStatusMarkers.set([]);
+      }
       return;
     }
 
@@ -404,12 +485,75 @@ export class CharacterDisplayComponent implements OnInit, AfterViewInit, OnDestr
         severity: status.severity,
       });
     }
-    this.bodyStatusMarkers = markers;
+    const layoutKey = markers
+      .map(marker => `${marker.id}:${marker.xPct.toFixed(1)}:${marker.yPct.toFixed(1)}:${marker.color}`)
+      .join('|');
+    if (layoutKey === this.markerLayoutKey) return;
+    this.markerLayoutKey = layoutKey;
+    this.bodyStatusMarkers.set(markers);
+  }
+
+  trackMarker(_index: number, marker: { id: string }): string {
+    return marker.id;
   }
 
   /** Clicking a marker jumps to the Health panel and pre-selects that status there. */
-  onMarkerClick(marker: { id: string }): void {
+  onMarkerClick(marker: { id: string }, event?: Event): void {
+    event?.stopPropagation();
     this.bodyStatusMarkerClicked.emit(marker.id);
+  }
+
+  onCanvasPointerDown(event: PointerEvent): void {
+    if (event.button !== 0) return;
+    this.pointerSession = {
+      id: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      lastX: event.clientX,
+      lastY: event.clientY,
+      moved: false,
+    };
+    (event.currentTarget as HTMLElement | null)?.setPointerCapture?.(event.pointerId);
+  }
+
+  onCanvasPointerMove(event: PointerEvent): void {
+    const session = this.pointerSession;
+    if (!session || event.pointerId !== session.id) return;
+    const dx = event.clientX - session.lastX;
+    const dy = event.clientY - session.lastY;
+    if (Math.hypot(event.clientX - session.x, event.clientY - session.y) > 6) session.moved = true;
+    if (session.moved) this.threeService.orbitBy(-dx * 0.008, dy * 0.005);
+    session.lastX = event.clientX;
+    session.lastY = event.clientY;
+  }
+
+  onCanvasPointerUp(event: PointerEvent): void {
+    const session = this.pointerSession;
+    if (!session || event.pointerId !== session.id) return;
+    this.pointerSession = null;
+    if (session.moved) return;
+    this.logTappedBodyPart(event);
+  }
+
+  onCanvasPointerCancel(event: PointerEvent): void {
+    if (this.pointerSession?.id === event.pointerId) this.pointerSession = null;
+  }
+
+  zoomIn(): void { this.threeService.dolly(-0.4); }
+  zoomOut(): void { this.threeService.dolly(0.4); }
+  resetCamera(): void { this.threeService.resetView(); }
+
+  /** A click (not a drag) on the model opens the add-condition modal for that region. */
+  logTappedBodyPart(event: { clientX: number; clientY: number; currentTarget: EventTarget | null }): void {
+    const target = (event.currentTarget as HTMLElement | null) ?? this.canvasRef?.nativeElement ?? null;
+    if (!target) return;
+    const rect = target.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    const ndcY = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    const part: BodyPart | null = this.threeService.pickBodyPartFromNdc(ndcX, ndcY);
+    if (!part) return;
+    this.bodyStatusModal?.openCreate(part);
   }
 
   private getModelPathForLevel(level: number): string {

@@ -1,9 +1,11 @@
 // body-diagram.component.spec.ts
-// Unit tests for BodyDiagramComponent — filter tabs, getFilteredStatuses(),
-// getZoneFill(), getZoneStroke(), hasStatus(), trackByBodyPart().
+// Unit tests for the Health body-status list (filters, summary, heal/edit/delete).
+// The flat SVG zone map has been retired; logging opens the shared modal instead.
 
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { of, BehaviorSubject } from 'rxjs';
+import { By } from '@angular/platform-browser';
+import { SimpleChange } from '@angular/core';
+import { BehaviorSubject } from 'rxjs';
 import { BodyDiagramComponent } from './body-diagram.component';
 import { BodyStatusService } from './body-status.service';
 import { BodyStatus } from './body-status.interface';
@@ -18,11 +20,6 @@ const MOCK_INJURY: BodyStatus = {
 const MOCK_ILLNESS: BodyStatus = {
   id: 'ill-1', bodyPart: 'chest', type: 'illness', severity: 'minor',
   name: 'Cold', description: 'Common cold', startDate: new Date(), color: '#ffff99',
-};
-
-const MOCK_SEVERE_INJURY: BodyStatus = {
-  id: 'inj-sev', bodyPart: 'left-knee', type: 'injury', severity: 'severe',
-  name: 'Torn Ligament', description: 'ACL tear', startDate: new Date(), color: '#ff3333',
 };
 
 const MOCK_CRITICAL_INJURY: BodyStatus = {
@@ -66,7 +63,7 @@ describe('BodyDiagramComponent', () => {
   let component: BodyDiagramComponent;
   let svcMock: ReturnType<typeof buildMockService>;
 
-  async function setup(active: BodyStatus[] = [MOCK_INJURY, MOCK_ILLNESS]) {
+  async function setup(active: BodyStatus[] = [MOCK_INJURY, MOCK_ILLNESS], preSelectedStatusId: string | null = null) {
     TestBed.resetTestingModule();
     svcMock = buildMockService(active);
 
@@ -77,6 +74,7 @@ describe('BodyDiagramComponent', () => {
 
     fixture   = TestBed.createComponent(BodyDiagramComponent);
     component = fixture.componentInstance;
+    if (preSelectedStatusId) component.preSelectedStatusId = preSelectedStatusId;
     fixture.detectChanges(); // triggers ngOnInit
   }
 
@@ -159,110 +157,83 @@ describe('BodyDiagramComponent', () => {
     });
   });
 
-  // ── getZoneFill() ──────────────────────────────────────────────────────────
+  // ── Retired SVG map ────────────────────────────────────────────────────────
 
-  describe('getZoneFill()', () => {
+  describe('retired SVG map', () => {
+    beforeEach(async () => setup());
+
+    it('does not render the flat body silhouette', () => {
+      const host: HTMLElement = fixture.nativeElement;
+      expect(host.querySelector('svg')).toBeNull();
+      expect(host.textContent).not.toContain('TAP ZONE TO LOG');
+    });
+
+    it('keeps the Active Conditions list and points logging at the 3D character', () => {
+      const host: HTMLElement = fixture.nativeElement;
+      expect(host.textContent).toContain('ACTIVE CONDITIONS');
+      expect(host.textContent).toContain('Tap a region on the 3D character');
+    });
+  });
+
+  // ── Shared editor (replaces SVG zone taps) ─────────────────────────────────
+
+  describe('condition management', () => {
     beforeEach(async () => setup([MOCK_INJURY]));
 
-    it('returns default transparent fill when bodyPart has no status', () => {
-      expect(component.getZoneFill('head')).toBe('rgba(201,168,76,0.12)');
+    it('+ ADD opens the shared modal without a pre-selected zone', () => {
+      fixture.debugElement.query(By.css('.bs-add-btn')).triggerEventHandler('click', null);
+      fixture.detectChanges();
+      expect(component.statusModal?.visible).toBe(true);
+      expect(component.statusModal?.editingStatus).toBeNull();
+      expect(component.statusModal?.modalData.bodyPart).toBe('chest');
+      expect(fixture.nativeElement.querySelector('.bs-modal-title').textContent).toContain('LOG CONDITION');
     });
 
-    it('returns minor fill color for a minor status', async () => {
-      await setup([{ ...MOCK_INJURY, bodyPart: 'head', severity: 'minor' }]);
-      expect(component.getZoneFill('head')).toBe('rgba(230,168,51,0.55)');
+    it('Edit opens the same modal populated from the condition', () => {
+      fixture.debugElement.query(By.css('.bs-act-edit')).triggerEventHandler('click', null);
+      fixture.detectChanges();
+      expect(component.statusModal?.editingStatus?.id).toBe('inj-1');
+      expect(component.statusModal?.modalData.bodyPart).toBe('left-knee');
+      expect(component.statusModal?.modalData.name).toBe('Sprain');
+      expect(fixture.nativeElement.querySelector('.bs-modal-title').textContent).toContain('EDIT CONDITION');
     });
 
-    it('returns moderate fill color', async () => {
-      await setup([MOCK_INJURY]); // severity: 'moderate', bodyPart: 'left-knee'
-      expect(component.getZoneFill('left-knee')).toBe('rgba(242,140,40,0.65)');
+    it('Healed asks for confirmation and marks the status healed', () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      fixture.debugElement.query(By.css('.bs-act-heal')).triggerEventHandler('click', null);
+      expect(svcMock.markHealed).toHaveBeenCalledWith('inj-1');
     });
 
-    it('returns severe fill color', async () => {
-      await setup([MOCK_SEVERE_INJURY]);
-      expect(component.getZoneFill('left-knee')).toBe('rgba(224,92,68,0.70)');
+    it('Healed does nothing when confirmation is declined', () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(false);
+      fixture.debugElement.query(By.css('.bs-act-heal')).triggerEventHandler('click', null);
+      expect(svcMock.markHealed).not.toHaveBeenCalled();
     });
 
-    it('returns critical fill color', async () => {
-      await setup([MOCK_CRITICAL_INJURY]);
-      expect(component.getZoneFill('head')).toBe('rgba(204,0,0,0.80)');
-    });
-
-    it('uses the worst (highest) severity when multiple statuses on same bodyPart', async () => {
-      await setup([MOCK_INJURY, MOCK_SEVERE_INJURY]); // both on left-knee
-      // Should show severe, not moderate
-      expect(component.getZoneFill('left-knee')).toBe('rgba(224,92,68,0.70)');
-    });
-  });
-
-  // ── getZoneStroke() ────────────────────────────────────────────────────────
-
-  describe('getZoneStroke()', () => {
-    it('returns default stroke when bodyPart has no status', async () => {
-      await setup([]);
-      expect(component.getZoneStroke('head')).toBe('rgba(201,168,76,0.35)');
-    });
-
-    it('returns minor stroke color', async () => {
-      await setup([{ ...MOCK_INJURY, bodyPart: 'head', severity: 'minor' }]);
-      expect(component.getZoneStroke('head')).toBe('#e6a833');
-    });
-
-    it('returns moderate stroke color', async () => {
-      await setup([MOCK_INJURY]);
-      expect(component.getZoneStroke('left-knee')).toBe('#f28c28');
-    });
-
-    it('returns severe stroke color', async () => {
-      await setup([MOCK_SEVERE_INJURY]);
-      expect(component.getZoneStroke('left-knee')).toBe('#e05c44');
-    });
-
-    it('returns critical stroke color', async () => {
-      await setup([MOCK_CRITICAL_INJURY]);
-      expect(component.getZoneStroke('head')).toBe('#cc0000');
+    it('Remove asks for confirmation and deletes the status', () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      fixture.debugElement.query(By.css('.bs-act-remove')).triggerEventHandler('click', null);
+      expect(svcMock.removeStatus).toHaveBeenCalledWith('inj-1');
     });
   });
 
-  // ── hasStatus() ────────────────────────────────────────────────────────────
+  // ── Marker pre-selection ───────────────────────────────────────────────────
 
-  describe('hasStatus()', () => {
-    beforeEach(async () => setup([MOCK_INJURY]));
-
-    it('returns true when bodyPart has at least one status', () => {
-      expect(component.hasStatus('left-knee')).toBe(true);
+  describe('preSelectedStatusId', () => {
+    it('highlights the status passed in on init', async () => {
+      await setup([MOCK_INJURY, MOCK_ILLNESS], 'ill-1');
+      expect(component.selectedStatus?.id).toBe('ill-1');
     });
 
-    it('returns false when bodyPart has no status', () => {
-      expect(component.hasStatus('head')).toBe(false);
-    });
-  });
-
-  // ── trackByBodyPart() ──────────────────────────────────────────────────────
-
-  describe('trackByBodyPart()', () => {
-    it('returns the bodyPart string from the location object', async () => {
-      await setup();
-      const loc = { bodyPart: 'left-knee' as const, x: 44, y: 74, label: 'Left Knee' };
-      expect(component.trackByBodyPart(0, loc)).toBe('left-knee');
-    });
-  });
-
-  // ── bodyPartLocations ──────────────────────────────────────────────────────
-
-  describe('bodyPartLocations', () => {
-    it('contains 26 body part locations', async () => {
-      await setup();
-      expect(component.bodyPartLocations).toHaveLength(26);
-    });
-
-    it('includes expected zones: head, chest, left-knee, right-foot', async () => {
-      await setup();
-      const parts = component.bodyPartLocations.map(l => l.bodyPart);
-      expect(parts).toContain('head');
-      expect(parts).toContain('chest');
-      expect(parts).toContain('left-knee');
-      expect(parts).toContain('right-foot');
+    it('re-selects and clears a hiding filter when a later marker click arrives', async () => {
+      await setup([MOCK_INJURY, MOCK_ILLNESS]);
+      component.activeFilter = 'injury';
+      component.preSelectedStatusId = 'ill-1';
+      component.ngOnChanges({
+        preSelectedStatusId: new SimpleChange(null, 'ill-1', false),
+      });
+      expect(component.activeFilter).toBe('all');
+      expect(component.selectedStatus?.id).toBe('ill-1');
     });
   });
 
