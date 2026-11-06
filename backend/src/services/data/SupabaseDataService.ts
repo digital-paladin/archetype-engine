@@ -337,6 +337,15 @@ export class SupabaseDataService implements IDataService {
     if (error) throw error;
   }
 
+  async deleteWearableTokens(userId: string, provider: string): Promise<void> {
+    const { error } = await this.db
+      .from('wearable_tokens')
+      .delete()
+      .eq('user_id', userId)
+      .eq('provider', provider);
+    if (error) throw error;
+  }
+
   // ── Treasury ─────────────────────────────────────────────────────────────
 
   private monthBounds(yyyyMM: string): { start: string; end: string } {

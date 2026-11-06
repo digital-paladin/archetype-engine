@@ -42,6 +42,8 @@ const MUTABLE_TABLES = [
   'skill_tree_entries',
   'fitbit_tokens',
   'wearable_tokens',
+  'oura_daily_summaries',
+  'oura_sync_status',
 ] as const;
 
 export function getConfiguredDemoUserId(): string | null {

@@ -48,6 +48,7 @@ import { getDataService } from './services/data/dataService';
 import { runDailyIncrement } from './services/abstinence.service';
 import { syncSleepDebtFromJournalSafe } from './services/sleepDebt.service';
 import { ConsolidationService } from './services/consolidation.service';
+import { chicagoDay } from './services/activityOccurredAt';
 import { CONSOLIDATION_CRON_EXPR } from './services/consolidationSchedule';
 import { schedule as cronSchedule } from 'node-cron';
 
@@ -238,6 +239,17 @@ httpServer.listen(PORT_NUMBER, '0.0.0.0', () => {
 
     try {
       const db = getDataService();
+      // Oura summaries follow the Chicago civil day this cron already runs in.
+      // Readiness and activity are stored. They do not award workout XP.
+      if (ouraCron.isConfigured() && await ouraCron.hasTokens(ownerUserId)) {
+        const date = chicagoDay(new Date());
+        const result = await ouraCron.syncDay(ownerUserId, date);
+        console.log(
+          `[CRON] Oura sync status=${result.status} date=${result.date} journalUpdated=${result.journalUpdated}`,
+        );
+        return;
+      }
+
       const today = new Date().toLocaleDateString('en-CA');
       const cached = await db.getJournalEntry(ownerUserId, today);
       if (cached && cached.fitbit_score && cached.fitbit_score > 0) {
@@ -249,12 +261,7 @@ httpServer.listen(PORT_NUMBER, '0.0.0.0', () => {
       let hours = 0;
       let provider = '';
 
-      if (ouraCron.isConfigured() && await ouraCron.hasTokens(ownerUserId)) {
-        const sleep = await ouraCron.getSleepData('today', ownerUserId);
-        score = sleep.score;
-        hours = sleep.hours;
-        provider = 'oura';
-      } else if (allowsGoogleHealthReads() && googleHealthCron.isConfigured() && await googleHealthCron.hasTokens(ownerUserId)) {
+      if (allowsGoogleHealthReads() && googleHealthCron.isConfigured() && await googleHealthCron.hasTokens(ownerUserId)) {
         const sleep = await googleHealthCron.getSleepData('today', ownerUserId);
         score = sleep.score;
         hours = sleep.hours;
@@ -287,7 +294,7 @@ httpServer.listen(PORT_NUMBER, '0.0.0.0', () => {
     console.log('[CRON] ═══════════════════════════════════════════\n');
   }, { timezone: 'America/Chicago' });
 
-  console.log('[CRON] 📅 Daily wearable sleep sync scheduled at 11:50pm CST (Oura → Google Health → Fitbit)');
+  console.log('[CRON] 📅 11:50pm America/Chicago: Oura daily summaries when connected, else Google Health / Fitbit sleep');
 }
 
 {
