@@ -86,7 +86,7 @@ This system occupies the gap: *you define the archetype, the system holds you ac
 - **Analytics** — XP history, class breakdown, consolidation trends
 
 ### Integrations (optional)
-- **Oura** — primary wearable (sleep + readiness)
+- **Oura** — OAuth2 daily sleep, readiness, and activity summaries ([docs/OURA.md](docs/OURA.md))
 - **Google Health API v4** — Fitbit / Pixel Watch sleep, activity, heart rate, nutrition, and vitals (replaces Fitbit Web API, shutdown 2026-10-30)
 - **Fitbit Web API** — legacy fallback until `FITBIT_DATA_SOURCE=google` (see MIGRATION.md)
 - **Todoist** — AI agent task creation and management

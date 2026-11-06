@@ -128,6 +128,9 @@ export interface VitalsData {
               <a [href]="fitbitAuthUrl" class="fitbit-link">Fitbit Web API (legacy) →</a>
             </p>
             <p class="wearable-disclosure">
+              Oura authorization stays on the server. Daily sleep, readiness, and activity summaries show up after Oura has them. A ring that is not paired yet can still be connected; sync stays empty until then. Readiness does not award XP or create a workout.
+            </p>
+            <p class="wearable-disclosure">
               Archetype Engine reads your Fitbit and Pixel Watch sleep, activity, heart rate, and nutrition from Google Health to fill your journal, sleep score, and daily metrics. It does not sell this data.
             </p>
           </div>
