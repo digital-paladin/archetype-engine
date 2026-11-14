@@ -209,6 +209,10 @@ export class GoogleHealthService implements IWearableService {
       family,
     );
 
+    const weightPointFilter =
+      `weight.sample_time.civil_time >= "${weekStart}" AND weight.sample_time.civil_time < "${next}"`;
+    const bodyFatPointFilter =
+      `body_fat.sample_time.civil_time >= "${dateStr}" AND body_fat.sample_time.civil_time < "${next}"`;
     const parts = await Promise.all([
       this.settle('weight', () => this.dailyRollup(userId, token, 'weight', dateStr, next, GOOGLE_SOURCES_FAMILY)),
       this.settle('weight-week', () => this.dailyRollup(userId, token, 'weight', weekStart, next, GOOGLE_SOURCES_FAMILY)),
@@ -224,9 +228,23 @@ export class GoogleHealthService implements IWearableService {
         'height.sample_time.civil_time >= "2000-01-01"',
         GOOGLE_SOURCES_FAMILY,
       )),
+      // Same google-sources family as the rollup, so a Hume origin inside that
+      // family can be removed before the average is trusted. A failed filter
+      // leaves the rollup unchanged.
+      this.settle('weight-points', () => this.reconcile(
+        userId, token, 'weight', weightPointFilter, GOOGLE_SOURCES_FAMILY,
+      )),
+      this.settle('body-fat-points', () => this.reconcile(
+        userId, token, 'body-fat', bodyFatPointFilter, GOOGLE_SOURCES_FAMILY,
+      )),
     ]);
     this.assertSome('vitals', parts);
-    const [weight, weekWeight, bodyFat, hydration, spo2, vo2, respiratory, height] = parts;
+    const [weight, weekWeight, bodyFat, hydration, spo2, vo2, respiratory, height, weightPoints, bodyFatPoints] = parts;
+    const allWeightPoints = weightPoints.value ?? [];
+    const todayWeightPoints = allWeightPoints.filter(point => {
+      const at = point?.weight?.sampleTime?.physicalTime;
+      return !at || String(at).slice(0, 10) === dateStr;
+    });
 
     return assembleVitals({
       date: dateStr,
@@ -238,6 +256,9 @@ export class GoogleHealthService implements IWearableService {
       vo2Points: vo2.value ?? [],
       respiratoryPoints: respiratory.value ?? [],
       heightPoints: height.value ?? [],
+      weightPoints: todayWeightPoints,
+      weekWeightPoints: allWeightPoints,
+      bodyFatPoints: bodyFatPoints.value ?? [],
     });
   }
 

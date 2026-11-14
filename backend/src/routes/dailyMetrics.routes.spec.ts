@@ -320,6 +320,26 @@ describe('POST /api/daily-metrics', () => {
     });
   });
 
+  it('stores a manual Hume proof reference and still awards no XP', async () => {
+    const res = await request(makeApp())
+      .post('/api/daily-metrics')
+      .send({
+        date: '2026-04-12',
+        metrics: { hrvMs: 40, restingHr: 60, source: 'hume', proofRef: 'app-record:band-1' },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true });
+    expect(res.body).not.toHaveProperty('xp');
+    expect(mockUpsertJournalEntry.mock.calls[0][1]).toEqual({
+      entry_date: '2026-04-12',
+      hrv_ms: 40,
+      resting_hr: 60,
+      vitals_source: 'hume',
+      vitals_proof_ref: 'app-record:band-1',
+    });
+  });
+
   it.each([
     [{ hrvMs: 0 }, 'hrvMs'],
     [{ hrvMs: 500.1 }, 'hrvMs'],

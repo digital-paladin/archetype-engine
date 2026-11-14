@@ -3,6 +3,7 @@ import {
   assembleActivitySummary,
   assembleFoodLog,
   assembleVitals,
+  isHumeBodyCompositionPoint,
   parseGoogleSleep,
 } from './googleHealthParse';
 
@@ -271,5 +272,62 @@ describe('google health parsers', () => {
     expect(vitals.vo2Max).toBe('42');
     expect(vitals.respiratoryRate).toBe(14.3);
     expect(vitals.bmi).toBeCloseTo(24.7, 1);
+  });
+
+  it('drops Hume weight and body-fat points and keeps the other Google reading', () => {
+    const hume = {
+      dataSource: 'raw:com.google.weight:com.hume.health:hume-pod',
+      origin: { packageName: 'com.hume.health' },
+      dataSourceFamily: 'users/me/dataSourceFamilies/health-connect',
+    };
+    expect(isHumeBodyCompositionPoint(hume)).toBe(true);
+    expect(isHumeBodyCompositionPoint({ dataSource: 'raw:com.google.weight:com.google.android.apps.fitness' })).toBe(false);
+
+    const vitals = assembleVitals({
+      date: '2026-10-18',
+      weightRollup: { weight: { weightGramsAvg: 90_000 } },
+      weekWeightRollups: [{ weight: { weightGramsAvg: 90_000 } }],
+      bodyFatRollup: { bodyFat: { bodyFatPercentageAvg: 30 } },
+      weightPoints: [
+        { ...hume, weight: { sampleTime: { physicalTime: '2026-10-18T12:00:00Z' }, weightGrams: 90_000 } },
+        {
+          dataSource: 'raw:com.google.weight:com.google.android.apps.fitness',
+          weight: { sampleTime: { physicalTime: '2026-10-18T12:05:00Z' }, weightGrams: 80_000 },
+        },
+      ],
+      weekWeightPoints: [
+        { ...hume, weight: { sampleTime: { physicalTime: '2026-10-18T12:00:00Z' }, weightGrams: 90_000 } },
+        {
+          dataSource: 'raw:com.google.weight:com.google.android.apps.fitness',
+          weight: { sampleTime: { physicalTime: '2026-10-17T12:00:00Z' }, weightGrams: 80_000 },
+        },
+      ],
+      bodyFatPoints: [
+        { ...hume, bodyFat: { bodyFatPercentage: 30 } },
+        { source: 'google-fit', bodyFat: { bodyFatPercentage: 18 } },
+      ],
+    });
+
+    expect(vitals.weight).toBeCloseTo(176.4, 1);
+    expect(vitals.bodyFat).toBe(18);
+    expect(vitals.weeklyWeightDays).toBe(1);
+    expect(vitals.weeklyAvgWeight).toBeCloseTo(176.4, 1);
+  });
+
+  it('omits Google weight when every point in the family is Hume', () => {
+    const vitals = assembleVitals({
+      weightRollup: { weight: { weightGramsAvg: 90_000 } },
+      bodyFatRollup: { bodyFat: { bodyFatPercentageAvg: 30 } },
+      weightPoints: [{
+        application: { packageName: 'com.hume.pod' },
+        weight: { weightGrams: 90_000 },
+      }],
+      bodyFatPoints: [{
+        originDataSource: 'hume-pod',
+        bodyFat: { bodyFatPercentage: 30 },
+      }],
+    });
+    expect(vitals.weight).toBeUndefined();
+    expect(vitals.bodyFat).toBeUndefined();
   });
 });

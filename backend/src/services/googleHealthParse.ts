@@ -65,6 +65,13 @@ interface SleepSession {
 
 interface DataPoint {
   name?: string;
+  dataSource?: string;
+  originDataSource?: string;
+  dataSourceFamily?: string;
+  origin?: { packageName?: string; name?: string };
+  application?: { packageName?: string };
+  source?: string;
+  dataOrigin?: { packageName?: string };
   sleep?: SleepSession;
   exercise?: ExerciseSession;
   nutritionLog?: NutritionLogPoint;
@@ -75,6 +82,7 @@ interface DataPoint {
   dailyRespiratoryRate?: { date?: CivilDate; breathsPerMinute?: number };
   height?: { sampleTime?: { physicalTime?: string }; heightMillimeters?: string | number };
   weight?: { sampleTime?: { physicalTime?: string }; weightGrams?: number };
+  bodyFat?: { bodyFatPercentage?: number; percentage?: number; bodyFatPercentageAvg?: number };
   activityLevel?: {
     interval?: { startTime?: string; endTime?: string };
     activityLevelType?: string;
@@ -153,6 +161,10 @@ export interface GoogleVitalsParts {
   weightRollup?: { weight?: { weightGramsAvg?: number } } | null;
   weekWeightRollups?: Array<{ weight?: { weightGramsAvg?: number } }>;
   bodyFatRollup?: { bodyFat?: { bodyFatPercentageAvg?: number } } | null;
+  /** Raw weight points. When any of them is Hume, the rollup is rebuilt without those points. */
+  weightPoints?: DataPoint[];
+  weekWeightPoints?: DataPoint[];
+  bodyFatPoints?: DataPoint[];
   hydrationRollup?: { hydrationLog?: { amountConsumed?: { millilitersSum?: number } } } | null;
   spo2Points?: DataPoint[];
   vo2Points?: DataPoint[];
@@ -539,7 +551,78 @@ export function assembleFoodLog(parts: GoogleFoodParts): FoodLog {
   };
 }
 
+export function pointOriginBlob(point: DataPoint): string {
+  return [
+    point.dataSource,
+    point.originDataSource,
+    point.dataSourceFamily,
+    point.origin?.packageName,
+    point.origin?.name,
+    point.application?.packageName,
+    point.source,
+    point.dataOrigin?.packageName,
+  ].filter((part): part is string => typeof part === 'string' && part.length > 0).join(' ');
+}
+
+/** Hume Pod readings that Health Connect also writes into Google Health. */
+export function isHumeBodyCompositionPoint(point: DataPoint): boolean {
+  return /hume/i.test(pointOriginBlob(point));
+}
+
+function bodyFatPercentage(point: DataPoint): number {
+  const raw = point.bodyFat;
+  return asNumber(raw?.bodyFatPercentage ?? raw?.percentage ?? raw?.bodyFatPercentageAvg);
+}
+
+function average(values: number[]): number | null {
+  if (values.length === 0) return null;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+/**
+ * Google Health weight and body-fat rollups mix every app in the source family.
+ * When a Hume point is in that set, rebuild the rollup from the other points so
+ * a Hume Pod reading cannot be counted again beside POST /api/system/body-composition.
+ * A day with only Hume points contributes no Google weight or body fat.
+ */
+export function excludeHumeBodyComposition(parts: GoogleVitalsParts): GoogleVitalsParts {
+  const next: GoogleVitalsParts = { ...parts };
+  if (parts.weightPoints?.some(isHumeBodyCompositionPoint)) {
+    const grams = parts.weightPoints
+      .filter(point => !isHumeBodyCompositionPoint(point))
+      .map(point => asNumber(point.weight?.weightGrams))
+      .filter(grams => grams > 0);
+    const avg = average(grams);
+    next.weightRollup = avg == null ? { weight: {} } : { weight: { weightGramsAvg: avg } };
+  }
+  if (parts.weekWeightPoints?.some(isHumeBodyCompositionPoint)) {
+    const byDay = new Map<string, number[]>();
+    for (const point of parts.weekWeightPoints) {
+      if (isHumeBodyCompositionPoint(point)) continue;
+      const grams = asNumber(point.weight?.weightGrams);
+      if (grams <= 0) continue;
+      const day = (point.weight?.sampleTime?.physicalTime || '').slice(0, 10) || 'undated';
+      const list = byDay.get(day) ?? [];
+      list.push(grams);
+      byDay.set(day, list);
+    }
+    next.weekWeightRollups = [...byDay.values()].map(values => ({
+      weight: { weightGramsAvg: average(values) ?? 0 },
+    }));
+  }
+  if (parts.bodyFatPoints?.some(isHumeBodyCompositionPoint)) {
+    const pcts = parts.bodyFatPoints
+      .filter(point => !isHumeBodyCompositionPoint(point))
+      .map(bodyFatPercentage)
+      .filter(pct => pct > 0);
+    const avg = average(pcts);
+    next.bodyFatRollup = avg == null ? { bodyFat: {} } : { bodyFat: { bodyFatPercentageAvg: avg } };
+  }
+  return next;
+}
+
 export function assembleVitals(parts: GoogleVitalsParts): VitalsData {
+  parts = excludeHumeBodyComposition(parts);
   const result: VitalsData = {};
   const todayGrams = parts.weightRollup?.weight?.weightGramsAvg ?? 0;
   if (todayGrams > 0) result.weight = gramsToLbs(todayGrams);

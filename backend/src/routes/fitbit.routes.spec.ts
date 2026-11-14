@@ -44,6 +44,10 @@ jest.mock('../services/wearableActivityXp.service', () => {
     awardWearableActivities: (...args: unknown[]) => mockAwardWearable(...args),
   };
 });
+const mockAwardDaily = jest.fn();
+jest.mock('../services/wearableMetricXp.service', () => ({
+  awardDailyWearableMetrics: (...args: unknown[]) => mockAwardDaily(...args),
+}));
 jest.mock('../services/sleepDebt.service', () => ({
   syncSleepDebtFromJournalSafe: jest.fn().mockResolvedValue(undefined),
 }));
@@ -69,12 +73,29 @@ describe('fitbit routes provider switch', () => {
   const original = process.env.FITBIT_DATA_SOURCE;
 
   beforeEach(() => {
+    // The Fitbit Web API shutdown is 2026-10-30. Pin the clock so these cases
+    // still cover the legacy fallback they were written for.
+    jest.useFakeTimers({
+      now: new Date('2026-10-15T18:00:00.000Z'),
+      doNotFake: [
+        'nextTick',
+        'queueMicrotask',
+        'setImmediate',
+        'setInterval',
+        'setTimeout',
+        'clearTimeout',
+        'clearInterval',
+      ],
+    });
     jest.clearAllMocks();
     mockGetJournal.mockResolvedValue(null);
     mockUpsertJournal.mockResolvedValue(undefined);
     mockGetQuests.mockResolvedValue([]);
     mockUpsertQuest.mockResolvedValue(undefined);
     mockAwardWearable.mockResolvedValue({ date: '2026-10-18', awarded: [], skipped: [], totalXp: 0 });
+    mockAwardDaily.mockResolvedValue({
+      date: '2026-10-18', awards: [], skipped: [], passiveXp: 0, totalXp: 0, readinessEffect: null,
+    });
     mockLoadToggl.mockResolvedValue([]);
     mockGoogle.isConfigured.mockReturnValue(false);
     mockGoogle.hasTokens.mockResolvedValue(false);
@@ -82,7 +103,12 @@ describe('fitbit routes provider switch', () => {
     delete process.env.FITBIT_DATA_SOURCE;
   });
 
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   afterAll(() => {
+    jest.useRealTimers();
     if (original === undefined) delete process.env.FITBIT_DATA_SOURCE;
     else process.env.FITBIT_DATA_SOURCE = original;
   });
@@ -105,6 +131,7 @@ describe('fitbit routes provider switch', () => {
     expect(mockGetQuests).not.toHaveBeenCalled();
     expect(mockUpsertQuest).not.toHaveBeenCalled();
     expect(mockAwardWearable).not.toHaveBeenCalled();
+    expect(mockAwardDaily).not.toHaveBeenCalled();
   });
 
   it('POST sync uses Google Health, writes the Warrior quest and awards XP', async () => {
@@ -136,6 +163,13 @@ describe('fitbit routes provider switch', () => {
       expect.stringContaining('Walk 30min'),
     );
     expect(mockAwardWearable).toHaveBeenCalledWith('user-1', '2026-10-18', 'google', activities, { overrides: [] });
+    expect(mockAwardDaily).toHaveBeenCalledWith({
+      userId: 'user-1',
+      date: '2026-10-18',
+      steps: 4000,
+      stepsSource: 'google-health',
+      fetchDevices: true,
+    });
   });
 
   it('POST sync writes an auto-detected walk into the quest and still passes it to the awarder', async () => {
@@ -156,6 +190,10 @@ describe('fitbit routes provider switch', () => {
     expect(quest).toContain('Walk 12min');
     expect(quest).toContain('Sport 45min');
     expect(mockAwardWearable).toHaveBeenCalledWith('user-1', '2026-10-13', 'fitbit', activities, { overrides: [] });
+    expect(mockAwardDaily).toHaveBeenCalledWith(expect.objectContaining({
+      steps: null,
+      stepsSource: null,
+    }));
   });
 
   it('POST sync keeps an existing Warrior Skills entry but still awards XP', async () => {
