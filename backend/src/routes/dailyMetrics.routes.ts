@@ -27,7 +27,7 @@ const SPO2_PCT_MIN = 0;
 const SPO2_PCT_MAX = 100;
 const VITALS_SOURCES = new Set(['hume', 'fitbit', 'oura', 'manual']);
 
-type VitalsColumnPatch = Partial<Pick<JournalEntry, 'hrv_ms' | 'resting_hr' | 'spo2_pct' | 'vitals_source'>>;
+type VitalsColumnPatch = Partial<Pick<JournalEntry, 'hrv_ms' | 'resting_hr' | 'spo2_pct' | 'vitals_source' | 'vitals_proof_ref'>>;
 
 /**
  * Optional vitals on the metrics object. Absent fields are left unchanged.
@@ -69,6 +69,17 @@ function readOptionalVitals(metrics: Record<string, unknown>): { error: string }
       return { error: 'source must be one of hume, fitbit, oura, manual' };
     }
     patch.vitals_source = source as JournalEntry['vitals_source'];
+  }
+
+  if (metrics.proofRef != null) {
+    if (typeof metrics.proofRef !== 'string') {
+      return { error: 'proofRef must be a string' };
+    }
+    const proof = metrics.proofRef.trim();
+    if (proof.length > 200 || /[\r\n]/.test(proof)) {
+      return { error: 'proofRef must be a single line of at most 200 characters' };
+    }
+    patch.vitals_proof_ref = proof || null;
   }
 
   return { patch };
@@ -151,6 +162,7 @@ function entryToMetrics(entry: JournalEntry | null) {
     restingHr: finiteOrNull(entry?.resting_hr),
     spo2Pct:   finiteOrNull(entry?.spo2_pct),
     source:    entry?.vitals_source ?? null,
+    proofRef:  entry?.vitals_proof_ref ?? null,
   };
   if (!entry) {
     return {
@@ -238,8 +250,10 @@ router.get('/sleep-history', async (req: Request, res: Response) => {
 });
 
 // ── POST /api/daily-metrics ───────────────────────────────────────────────────
-// Body: { date, metrics: { sleep?, nutrition?, stress?, hrvMs?, restingHr?, spo2Pct?, source? } }
-// Vitals are optional and do not award XP. source tags the vitals reading only.
+// Body: { date, metrics: { sleep?, nutrition?, stress?, hrvMs?, restingHr?, spo2Pct?, source?, proofRef? } }
+// Vitals are optional and do not award XP. Resting HR and HRV pay nothing from any device.
+// proofRef is a screenshot or app-record id for a manual Hume Band entry. Without one the
+// row is still stored. source tags the vitals reading only.
 router.post('/', async (req: Request, res: Response) => {
   const { date, metrics } = req.body;
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {

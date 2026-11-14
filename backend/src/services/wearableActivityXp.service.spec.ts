@@ -349,4 +349,56 @@ describe('awardWearableActivities', () => {
     expect(r.skipped[0].reason).toBe('auto_walk');
     expect(mockLogActivity).not.toHaveBeenCalled();
   });
+
+  it('pays 0 when an Oura session overlaps an awarded session by 50% or more of its time', async () => {
+    mockGetActivityLog.mockResolvedValue([
+      {
+        activity_type: 'workout-cardio',
+        class_name: 'Warrior',
+        duration_hours: 1,
+        xp_awarded: 24,
+        logged_at: '2026-10-13T15:00:00.000Z',
+        notes: '[wearable:2026-10-13T10:00] Wearable (google): Run 60min',
+      },
+    ]);
+    const half = await awardWearableActivities('u1', '2026-10-13', 'oura', [
+      { name: 'Run', durationMin: 60, calories: 400, startTime: '10:30' },
+    ], NOW);
+    expect(half.totalXp).toBe(0);
+    expect(half.skipped[0].reason).toBe('overlap');
+    expect(mockPersist).not.toHaveBeenCalled();
+
+    const exactHalfOfCandidate = await awardWearableActivities('u1', '2026-10-13', 'manual', [
+      { name: 'Run', durationMin: 120, calories: 700, startTime: '09:00' },
+    ], NOW);
+    expect(exactHalfOfCandidate.totalXp).toBe(0);
+    expect(exactHalfOfCandidate.skipped[0].reason).toBe('overlap');
+  });
+
+  it('pays the same workout rate when overlap is under half the candidate', async () => {
+    mockGetActivityLog.mockResolvedValue([
+      {
+        activity_type: 'workout-cardio',
+        class_name: 'Warrior',
+        duration_hours: 1,
+        xp_awarded: 24,
+        logged_at: '2026-10-13T15:00:00.000Z',
+        notes: '[wearable:2026-10-13T10:00] Wearable (google): Run 60min',
+      },
+    ]);
+    const r = await awardWearableActivities('u1', '2026-10-13', 'oura', [
+      { name: 'Run', durationMin: 100, calories: 500, startTime: '10:50' },
+    ], NOW);
+    expect(r.skipped).toEqual([]);
+    expect(r.awarded[0]).toMatchObject({ activityType: 'workout-cardio', xp: 15 + Math.floor(100 * 0.15) });
+  });
+
+  it('keeps the Google Health path primary when two of its sessions overlap', async () => {
+    const r = await awardWearableActivities('u1', '2026-10-13', 'google', [
+      { name: 'Run', durationMin: 60, calories: 400, startTime: '10:00', sourceId: 'g1' },
+      { name: 'Run', durationMin: 60, calories: 400, startTime: '10:10', sourceId: 'g2' },
+    ], NOW);
+    expect(r.awarded).toHaveLength(2);
+    expect(r.totalXp).toBe((15 + Math.floor(60 * 0.15)) * 2);
+  });
 });

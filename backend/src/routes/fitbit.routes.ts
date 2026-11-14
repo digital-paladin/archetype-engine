@@ -14,6 +14,7 @@ import {
   WearableXpResult,
 } from '../services/wearableActivityXp.service';
 import { loadTogglSportOverrides } from '../services/togglWearableTyping.service';
+import { awardDailyWearableMetrics, DailyWearableXpResult } from '../services/wearableMetricXp.service';
 import { redactTogglSecret } from '../services/togglTrack.service';
 import type { ActivitySummary } from '../services/fitbit.service';
 import { chicagoDay } from '../services/activityOccurredAt';
@@ -395,6 +396,19 @@ router.post('/activities/sync', authMiddleware, async (req: Request, res: Respon
     return res.status(500).json({ success: false, error: `XP award failed: ${msg}`, questWritten });
   }
 
+  let metricXp: DailyWearableXpResult | null = null;
+  try {
+    metricXp = await awardDailyWearableMetrics({
+      userId,
+      date: dateStr,
+      steps: provider === 'google' ? data.steps : null,
+      stepsSource: provider === 'google' ? 'google-health' : null,
+      fetchDevices: true,
+    });
+  } catch (metricErr) {
+    console.warn(`[WEARABLE XP] Passive and scan awards skipped: ${caughtErrorMessage(metricErr)}`);
+  }
+
   console.log('[FITBIT] ═══════════════════════════════════════\n');
   res.json({
     success: true,
@@ -403,6 +417,7 @@ router.post('/activities/sync', authMiddleware, async (req: Request, res: Respon
     ...data,
     questWritten,
     xp,
+    metricXp,
   });
 });
 
