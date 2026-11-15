@@ -15,7 +15,7 @@
 -- Do not apply this file to production until the owner has typed approval.
 -- After that approval:
 --
---   node backend/scripts/apply-migration.js supabase/migrations/015_wearable_xp_awards.sql
+--   node backend/scripts/apply-migration.js supabase/migrations/017_wearable_xp_awards.sql
 
 CREATE TABLE IF NOT EXISTS wearable_xp_awards (
   id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
