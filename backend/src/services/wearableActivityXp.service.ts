@@ -26,6 +26,7 @@ import type { ActivityEntry } from './data/IDataService';
 import type { FitbitActivity } from './fitbit.service';
 import { XpCalculatorService } from './xpCalculator.service';
 import { persistClassXpAwards, toCanonicalClassName } from './xpAward.service';
+import { isPrimaryWorkoutSource, isSameWorkoutSession, WorkoutInterval } from './wearableMetricXp';
 import { getActiveBodyStatuses } from './bodyStatus.service';
 import { ActivityWhenError, resolveActivityWhen } from './activityOccurredAt';
 
@@ -210,7 +211,7 @@ export interface WearableXpAward {
 
 export interface WearableXpSkip {
   name: string;
-  reason: 'already_awarded' | 'no_duration' | 'outside_window' | 'future' | 'invalid_time' | 'auto_walk';
+  reason: 'already_awarded' | 'no_duration' | 'outside_window' | 'future' | 'invalid_time' | 'auto_walk' | 'overlap';
   tag: string;
 }
 
@@ -342,6 +343,49 @@ function alreadyAwarded(slot: string, id: string | null, seen: WearableSeen): bo
   return false;
 }
 
+const WORKOUT_SESSION_TYPES = new Set([
+  'workout-strength',
+  'workout-cardio',
+  'workout-mobility',
+  'workout-mma',
+]);
+
+const SLOT_CLOCK = /\[wearable:(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})\]/;
+
+/**
+ * Interval of a workout that already paid XP. The wearable slot tag is the
+ * start when the stored logged_at was anchored to noon UTC.
+ * Step and sleep awards are not sessions, so they cannot zero a later workout.
+ */
+export function awardedWorkoutInterval(row: ActivityEntry): WorkoutInterval | null {
+  if (!WORKOUT_SESSION_TYPES.has(row.activity_type)) return null;
+  if (!(Number(row.xp_awarded) > 0)) return null;
+  const minutes = Math.round(Number(row.duration_hours) * 60);
+  if (!(minutes > 0)) return null;
+  const slot = row.notes?.match(SLOT_CLOCK);
+  let startMs: number | null = null;
+  if (slot) {
+    const start = zonedStart(slot[1], slot[2]);
+    const parsed = start ? Date.parse(start) : NaN;
+    if (Number.isFinite(parsed)) startMs = parsed;
+  }
+  if (startMs == null && row.logged_at) {
+    const parsed = Date.parse(row.logged_at);
+    if (Number.isFinite(parsed)) startMs = parsed;
+  }
+  if (startMs == null) return null;
+  return { startMs, endMs: startMs + minutes * 60_000 };
+}
+
+function candidateInterval(date: string, activity: FitbitActivity): WorkoutInterval | null {
+  if (!activity.startTime || !(activity.durationMin > 0)) return null;
+  const start = zonedStart(date, activity.startTime);
+  if (!start) return null;
+  const startMs = Date.parse(start);
+  if (!Number.isFinite(startMs)) return null;
+  return { startMs, endMs: startMs + activity.durationMin * 60_000 };
+}
+
 function whenSkipReason(err: ActivityWhenError): WearableXpSkip['reason'] {
   if (err.message.includes('backfill')) return 'outside_window';
   if (err.message.includes('future')) return 'future';
@@ -383,7 +427,13 @@ async function awardUnlocked(
   const db = getDataService();
   const existing: ActivityEntry[] = await db.getActivityLog(userId, DEDUPE_LOG_LIMIT, date);
   const seen = emptySeen();
-  for (const row of existing) rememberNotes(row.notes, seen);
+  const awardedIntervals: WorkoutInterval[] = [];
+  for (const row of existing) {
+    rememberNotes(row.notes, seen);
+    const interval = awardedWorkoutInterval(row);
+    if (interval) awardedIntervals.push(interval);
+  }
+  const primary = isPrimaryWorkoutSource(provider);
 
   // Same body-status rule as POST /api/activities: highest matching penalty wins.
   const penaltyByType: Record<string, number> = {};
@@ -411,6 +461,11 @@ async function awardUnlocked(
     }
     if (isAutoDetectedWalk(a)) {
       result.skipped.push({ name: a.name, reason: 'auto_walk', tag: slot });
+      continue;
+    }
+    const interval = candidateInterval(date, a);
+    if (!primary && interval && awardedIntervals.some(awarded => isSameWorkoutSession(interval, awarded))) {
+      result.skipped.push({ name: a.name, reason: 'overlap', tag: slot });
       continue;
     }
 
@@ -461,6 +516,7 @@ async function awardUnlocked(
     await persistClassXpAwards(userId, [{ className, xp }]);
 
     rememberNotes(notes, seen);
+    if (interval && xp > 0) awardedIntervals.push(interval);
     result.awarded.push({ name: displayName, activityType, durationMin: a.durationMin, xp, tag: slot });
     result.totalXp += xp;
   }

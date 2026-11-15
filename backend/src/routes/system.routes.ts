@@ -21,6 +21,8 @@ import {
 import { ConsumptionError, correctConsumption, listConsumption, logConsumption } from '../services/consumption.service';
 import { getDataService } from '../services/data/dataService';
 import type { CharacterStats } from '../services/data/IDataService';
+import { BodyCompositionError } from '../domain/bodyComposition';
+import { listBodyComposition, logBodyComposition } from '../services/bodyComposition.service';
 
 const router = Router();
 
@@ -62,6 +64,14 @@ function toStatusTree(stat: CharacterStats): {
     currentXp: stat.current_xp,
     totalXp: stat.total_xp,
   };
+}
+
+function sendBodyCompositionError(res: Response, err: unknown): boolean {
+  if (err instanceof BodyCompositionError) {
+    res.status(err.status).json({ success: false, error: err.code, message: err.message });
+    return true;
+  }
+  return false;
 }
 
 function requirePlayer(authKind: 'user' | 'service'): void {
@@ -191,6 +201,29 @@ router.post('/messages', async (req: Request, res: Response) => {
     const result = await postSystemMessage(userId, req.body ?? {}, authKind);
     res.status(result.idempotentReplay ? 200 : 201).json({ success: true, ...result });
   } catch (err) {
+    sendError(res, err);
+  }
+});
+
+router.post('/body-composition', async (req: Request, res: Response) => {
+  try {
+    const { userId } = authOf(req);
+    // Raw scale values only. req.body.xp is ignored; a reading does not award XP.
+    const result = await logBodyComposition(userId, req.body ?? {});
+    res.status(result.idempotentReplay ? 200 : 201).json({ success: true, ...result });
+  } catch (err) {
+    if (sendBodyCompositionError(res, err)) return;
+    sendError(res, err);
+  }
+});
+
+router.get('/body-composition', async (req: Request, res: Response) => {
+  try {
+    const { userId } = authOf(req);
+    const readings = await listBodyComposition(userId, req.query.limit);
+    res.json({ success: true, readings });
+  } catch (err) {
+    if (sendBodyCompositionError(res, err)) return;
     sendError(res, err);
   }
 });

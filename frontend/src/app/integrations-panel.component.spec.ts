@@ -7,6 +7,9 @@ import { environment } from '../environments/environment';
 
 const CONNECT_URL = `${environment.apiUrl}/api/todoist/connect`;
 const WEARABLES_STATUS_URL = `${environment.apiUrl}/api/wearables/status`;
+const OURA_STATUS_URL = `${environment.apiUrl}/api/oura/status`;
+const OURA_SYNC_URL = `${environment.apiUrl}/api/oura/sync`;
+const OURA_DISCONNECT_URL = `${environment.apiUrl}/api/oura/connection`;
 const FULL_KEY = 'abcdefghijklmnopqrstuvwxyz1234567890abcd';
 
 function wearablesStatus(overrides: Record<string, Record<string, unknown>> = {}) {
@@ -29,6 +32,7 @@ describe('IntegrationsPanelComponent', () => {
   function flushLoads(opts?: {
     todoist?: Record<string, unknown>;
     providers?: Record<string, Record<string, unknown>>;
+    oura?: Record<string, unknown>;
   }): void {
     httpMock.expectOne(CONNECT_URL).flush(opts?.todoist ?? {
       success: true,
@@ -37,6 +41,14 @@ describe('IntegrationsPanelComponent', () => {
       masked: null,
     });
     httpMock.expectOne(WEARABLES_STATUS_URL).flush(wearablesStatus(opts?.providers));
+    httpMock.expectOne(OURA_STATUS_URL).flush(opts?.oura ?? {
+      success: true,
+      configured: true,
+      connected: false,
+      lastSyncAt: null,
+      lastSyncDetail: null,
+      latest: null,
+    });
   }
 
   function section(id: string): HTMLElement {
@@ -226,5 +238,83 @@ describe('IntegrationsPanelComponent', () => {
     expect(section('oura').querySelector('.status-row')?.textContent).toContain('Status unavailable');
     expect(section('google').querySelector('#wearable-google-connect')?.textContent).toContain('Connect');
     expect(section('fitbit').querySelector('#wearable-fitbit-connect')).toBeTruthy();
+  });
+
+  it('syncs Oura without sending a token and shows the stored synthetic summary', () => {
+    fixture.detectChanges();
+    flushLoads({
+      oura: {
+        success: true,
+        configured: true,
+        connected: true,
+        lastSyncAt: null,
+        lastSyncDetail: null,
+        latest: null,
+      },
+    });
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('#wearable-oura-sync-status')?.textContent)
+      .toContain('No sync yet');
+
+    fixture.nativeElement.querySelector('#wearable-oura-sync').click();
+    const post = httpMock.expectOne(OURA_SYNC_URL);
+    expect(post.request.method).toBe('POST');
+    expect(post.request.body).toEqual({});
+    post.flush({
+      success: true,
+      detail: 'No Oura summaries for this day. The account can be connected before a ring is paired or synced.',
+      xpAwarded: 0,
+    });
+    httpMock.expectOne(WEARABLES_STATUS_URL).flush(wearablesStatus());
+    httpMock.expectOne(OURA_STATUS_URL).flush({
+      success: true,
+      configured: true,
+      connected: true,
+      lastSyncDetail: 'Sleep, readiness, and activity summaries stored.',
+      latest: {
+        date: '2026-11-06',
+        timezone: '-05:00',
+        noData: false,
+        sleep: { score: 82, hours: 7 },
+        readiness: { score: 74 },
+        activity: { score: 80, steps: 8421 },
+      },
+    });
+    fixture.detectChanges();
+
+    const oura = section('oura');
+    expect(oura.textContent).toContain('Sleep score 82');
+    expect(oura.textContent).toContain('8421 steps');
+    expect(oura.textContent).not.toContain('access_token');
+    expect(oura.textContent).not.toContain('refresh_token');
+  });
+
+  it('disconnects Oura for the signed-in account', () => {
+    fixture.detectChanges();
+    flushLoads({
+      oura: {
+        success: true,
+        configured: true,
+        connected: true,
+        lastSyncDetail: 'Sleep, readiness, and activity summaries stored.',
+        latest: null,
+      },
+    });
+    fixture.detectChanges();
+    fixture.nativeElement.querySelector('#wearable-oura-disconnect').click();
+    const del = httpMock.expectOne(OURA_DISCONNECT_URL);
+    expect(del.request.method).toBe('DELETE');
+    del.flush({ success: true, connected: false });
+    httpMock.expectOne(WEARABLES_STATUS_URL).flush(wearablesStatus());
+    httpMock.expectOne(OURA_STATUS_URL).flush({
+      success: true,
+      configured: true,
+      connected: false,
+      lastSyncDetail: null,
+      latest: null,
+    });
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('#wearable-oura-disconnect')).toBeNull();
+    expect(section('oura').textContent).toContain('Not connected');
   });
 });
