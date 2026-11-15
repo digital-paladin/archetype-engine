@@ -56,6 +56,7 @@ jest.mock('../middleware/auth.middleware', () => ({
 
 import express from 'express';
 import request from 'supertest';
+import { FITBIT_WEB_API_SHUTDOWN } from '../services/fitbitDataSource';
 import router from './fitbit.routes';
 
 function app() {
@@ -69,6 +70,20 @@ describe('fitbit routes provider switch', () => {
   const original = process.env.FITBIT_DATA_SOURCE;
 
   beforeEach(() => {
+    // The Fitbit Web API shutdown is 2026-10-30. Pin the clock so these cases
+    // still cover the legacy fallback they were written for.
+    jest.useFakeTimers({
+      now: new Date('2026-10-15T18:00:00.000Z'),
+      doNotFake: [
+        'nextTick',
+        'queueMicrotask',
+        'setImmediate',
+        'setInterval',
+        'setTimeout',
+        'clearTimeout',
+        'clearInterval',
+      ],
+    });
     jest.clearAllMocks();
     mockGetJournal.mockResolvedValue(null);
     mockUpsertJournal.mockResolvedValue(undefined);
@@ -82,7 +97,12 @@ describe('fitbit routes provider switch', () => {
     delete process.env.FITBIT_DATA_SOURCE;
   });
 
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   afterAll(() => {
+    jest.useRealTimers();
     if (original === undefined) delete process.env.FITBIT_DATA_SOURCE;
     else process.env.FITBIT_DATA_SOURCE = original;
   });
@@ -406,5 +426,132 @@ describe('fitbit routes provider switch', () => {
     expect(res.body.sleep.hours).toBe(7.5);
     expect(mockGoogle.getSleepData).not.toHaveBeenCalled();
     expect(mockFitbit.getSleepData).not.toHaveBeenCalled();
+  });
+
+  describe('after the Fitbit Web API shutdown', () => {
+    beforeEach(() => {
+      jest.setSystemTime(new Date(`${FITBIT_WEB_API_SHUTDOWN}T00:00:00.000Z`));
+    });
+
+    it('returns 503 for a legacy activities read and does not call Fitbit', async () => {
+      mockFitbit.isConfigured.mockReturnValue(true);
+      const res = await request(app()).get('/api/fitbit/activities/today?date=2026-10-30');
+
+      expect(res.status).toBe(503);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toContain(`shut down on ${FITBIT_WEB_API_SHUTDOWN}`);
+      expect(mockFitbit.getActivities).not.toHaveBeenCalled();
+      expect(mockGoogle.getActivities).not.toHaveBeenCalled();
+      expect(mockUpsertJournal).not.toHaveBeenCalled();
+    });
+
+    it('returns 503 for legacy-mode vitals when Google Health is not configured', async () => {
+      process.env.FITBIT_DATA_SOURCE = 'legacy';
+      mockFitbit.isConfigured.mockReturnValue(true);
+      mockFitbit.getVitals.mockResolvedValue({ waterOz: 16 });
+
+      const res = await request(app()).get('/api/fitbit/vitals/today?date=2026-10-30');
+
+      expect(res.status).toBe(503);
+      expect(res.body.success).toBe(false);
+      expect(mockFitbit.getVitals).not.toHaveBeenCalled();
+      expect(mockGoogle.getVitals).not.toHaveBeenCalled();
+      expect(mockUpsertJournal).not.toHaveBeenCalled();
+    });
+
+    it('asks for Google Health consent in legacy mode when that client is configured', async () => {
+      process.env.FITBIT_DATA_SOURCE = 'legacy';
+      mockGoogle.isConfigured.mockReturnValue(true);
+      mockGoogle.hasTokens.mockResolvedValue(true);
+      mockFitbit.isConfigured.mockReturnValue(true);
+      mockFitbit.getVitals.mockResolvedValue({ waterOz: 16 });
+
+      const res = await request(app()).get('/api/fitbit/vitals/today?date=2026-10-30');
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(false);
+      expect(res.body.requiresAuth).toBe(true);
+      expect(res.body.source).toBeUndefined();
+      expect(mockFitbit.getVitals).not.toHaveBeenCalled();
+      expect(mockGoogle.getVitals).not.toHaveBeenCalled();
+      expect(mockUpsertJournal).not.toHaveBeenCalled();
+    });
+
+    it('returns 503 for activity sync before any fetch or XP award', async () => {
+      mockFitbit.isConfigured.mockReturnValue(true);
+      const res = await request(app()).post('/api/fitbit/activities/sync').send({ date: '2026-10-13' });
+
+      expect(res.status).toBe(503);
+      expect(res.body.success).toBe(false);
+      expect(mockFitbit.getActivities).not.toHaveBeenCalled();
+      expect(mockAwardWearable).not.toHaveBeenCalled();
+      expect(mockLoadToggl).not.toHaveBeenCalled();
+      expect(mockUpsertQuest).not.toHaveBeenCalled();
+    });
+
+    it('returns 503 for nutrition and a sleep cache miss when only Fitbit is configured', async () => {
+      mockFitbit.isConfigured.mockReturnValue(true);
+      const nutrition = await request(app()).get('/api/fitbit/nutrition/today?date=2026-10-30');
+      const sleep = await request(app()).get('/api/fitbit/sleep/today?date=2026-10-30');
+
+      expect(nutrition.status).toBe(503);
+      expect(sleep.status).toBe(503);
+      expect(mockFitbit.getFoodLog).not.toHaveBeenCalled();
+      expect(mockFitbit.getSleepData).not.toHaveBeenCalled();
+      expect(mockUpsertJournal).not.toHaveBeenCalled();
+    });
+
+    it('keeps a cached sleep night and does not call either API', async () => {
+      mockFitbit.isConfigured.mockReturnValue(true);
+      mockGetJournal.mockResolvedValue({
+        sleep_hours: 7.5, fitbit_score: 90, sleep_start: '23:00', sleep_end: '06:30',
+      });
+
+      const res = await request(app()).get('/api/fitbit/sleep/today?date=2026-10-30');
+
+      expect(res.status).toBe(200);
+      expect(res.body.source).toBe('cache');
+      expect(mockFitbit.getSleepData).not.toHaveBeenCalled();
+      expect(mockGoogle.getSleepData).not.toHaveBeenCalled();
+    });
+
+    it('still serves a connected Google Health account', async () => {
+      mockGoogle.isConfigured.mockReturnValue(true);
+      mockGoogle.hasTokens.mockResolvedValue(true);
+      mockFitbit.isConfigured.mockReturnValue(true);
+      mockGoogle.getActivities.mockResolvedValue({
+        steps: 4000, activeMinutes: 30, caloriesOut: 2200, activities: [],
+      });
+
+      const res = await request(app()).get('/api/fitbit/activities/today?date=2026-10-30');
+
+      expect(res.status).toBe(200);
+      expect(res.body.source).toBe('google-health');
+      expect(mockFitbit.getActivities).not.toHaveBeenCalled();
+    });
+
+    it('asks for Google Health consent instead of falling back to Fitbit', async () => {
+      mockGoogle.isConfigured.mockReturnValue(true);
+      mockGoogle.hasTokens.mockResolvedValue(false);
+      mockFitbit.isConfigured.mockReturnValue(true);
+
+      const res = await request(app()).get('/api/fitbit/nutrition/today?date=2026-10-30');
+
+      expect(res.status).toBe(200);
+      expect(res.body.requiresAuth).toBe(true);
+      expect(mockFitbit.getFoodLog).not.toHaveBeenCalled();
+      expect(mockUpsertJournal).not.toHaveBeenCalled();
+    });
+
+    it('omits the legacy auth URL from status', async () => {
+      mockFitbit.isConfigured.mockReturnValue(true);
+
+      const res = await request(app()).get('/api/fitbit/status');
+
+      expect(res.status).toBe(200);
+      expect(res.body.configured).toBe(true);
+      expect(res.body.provider).toBeNull();
+      expect(res.body.authUrl).toBeNull();
+    });
   });
 });
