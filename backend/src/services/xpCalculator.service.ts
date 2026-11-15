@@ -3,6 +3,7 @@ import {
   nightlyExtensionBonusPct,
   extensionStreakBonusPct,
 } from './sleepDebt.service';
+import { isMeetingActivityType, isSocialActivityType } from '../config/socialXp.config';
 
 export interface ClassXpAward {
   /** Canonical class name used in journal entries (e.g. 'Artist', 'Sage', 'Developer') */
@@ -129,6 +130,13 @@ export class XpCalculatorService {
    * Multi-class activities return one entry per awarded class.
    */
   getMultiClassXP(activityType: string, duration?: number): Array<{ class: string; xp: number }> {
+    // Social XP, and meetings without an explicit TTI work tag, are decided
+    // on the activity route. Returning 0 here stops a fallback of 10 Sage XP
+    // or Developer XP for a meeting that was not marked TTI.
+    if (isSocialActivityType(activityType) || isMeetingActivityType(activityType)) {
+      return [{ class: 'social', xp: 0 }];
+    }
+
     const config = this.activityXP[activityType];
     if (!config) return [{ class: this.getCategoryFromActivity(activityType), xp: 10 }];
 
@@ -157,6 +165,7 @@ export class XpCalculatorService {
    * Get category from activity type (primary class for journal routing).
    */
   getCategoryFromActivity(activityType: string): string {
+    if (isSocialActivityType(activityType) || isMeetingActivityType(activityType)) return 'social';
     if (activityType.startsWith('redteam')) return 'redteam';
     if (activityType.startsWith('iq2') || activityType === 'personal-project') return 'developer';
     if (activityType === 'paladin-app-dev') return 'developer';

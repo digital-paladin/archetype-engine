@@ -48,7 +48,9 @@ router.get('/status', authMiddleware, async (req: Request, res: Response) => {
       },
       fitbit: {
         configured: fitbit.isConfigured(),
-        connected: !!fitbitTokens?.access_token && !googleConnected,
+        // Authorized legacy account. Independent of Google Health — both can
+        // be connected; the sleep cascade still prefers Oura, then Google.
+        connected: !!fitbitTokens?.access_token,
         connectPath: '/api/fitbit/auth',
         legacy: true,
       },

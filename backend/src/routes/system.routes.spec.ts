@@ -14,6 +14,12 @@ import {
   MemorySystemQuestStore,
   setSystemQuestStore,
 } from '../services/systemQuest.store';
+import {
+  MemoryInventoryStore,
+  getInventoryStore,
+  setInventoryStore,
+} from '../services/inventory.store';
+import { createInventoryItem } from '../services/inventory.service';
 
 const mockGetUser = jest.fn();
 const mockGetCharacterStats = jest.fn();
@@ -80,6 +86,7 @@ function daily(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   setSystemQuestStore(new MemorySystemQuestStore());
+  setInventoryStore(new MemoryInventoryStore());
   setServiceCredentialStore(new MemoryServiceCredentialStore());
   mockGetUser.mockReset().mockResolvedValue({ data: { user: null }, error: { message: 'invalid' } });
   mockGetCharacterStats.mockReset().mockResolvedValue([
@@ -304,6 +311,8 @@ describe('quest resolution', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.quest.objectives[0]).toEqual(expect.objectContaining({ progress: 20, done: true }));
+    expect(res.body.xpApplied).toEqual([]);
+    expect(mockUpsertCharacterStats).not.toHaveBeenCalled();
   });
 });
 
@@ -789,5 +798,183 @@ describe('PATCH /api/system/quests/:id — corrections', () => {
     });
     expect(kind.status).toBe(400);
     expect(kind.body.message).toMatch(/kind/);
+  });
+});
+
+describe('acquisition quests', () => {
+  const rigObjectives = [
+    { id: 'save-target', label: 'Savings goal reached', target: 1, xpReward: { 'Financial Strategist': 25 } },
+    { id: 'purchase-gpu', label: 'Purchase the RTX 3090', target: 1, xpReward: { Developer: 40 } },
+    { id: 'build', label: 'Assemble the rig', target: 1, xpReward: { Developer: 60 } },
+    { id: 'software', label: 'Bring up the local AI software', target: 1, xpReward: { Developer: 80, Sage: 20 } },
+  ];
+
+  async function rigItem() {
+    return createInventoryItem('paul', {
+      id: 'rtx-3090-rig',
+      name: 'RTX 3090 PC rig',
+      type: 'equipment',
+      category: 'tech-hardware',
+      icon: '🖥️',
+      unit: 'rig',
+      description: 'Local AI build.',
+      stockStatus: 'needed',
+      priority: 'HIGH',
+    });
+  }
+
+  function acquisition(itemRowId: string, overrides: Record<string, unknown> = {}) {
+    return {
+      idempotencyKey: 'acquisition:rtx-3090-rig',
+      kind: 'acquisition',
+      title: 'RTX 3090 PC rig',
+      description: 'Local AI build. Money tracked here is not experience.',
+      targetCostCents: 180000,
+      amountSavedCents: 0,
+      inventoryItemId: itemRowId,
+      objectives: rigObjectives,
+      xpReward: {},
+      ...overrides,
+    };
+  }
+
+  it('tracks the 3090 budget without paying XP, then pays milestone XP once and stocks the item on clear', async () => {
+    const item = await rigItem();
+    const created = await request(userApp()).post('/api/system/quests').send(acquisition(item.rowId));
+    expect(created.status).toBe(201);
+    expect(created.body.quest.kind).toBe('acquisition');
+    expect(created.body.quest.deadline).toBeNull();
+    expect(created.body.quest.budgetGrantsXp).toBe(false);
+    expect(created.body.quest.targetCostCents).toBe(180000);
+    expect(created.body.quest.amountSavedCents).toBe(0);
+    expect(created.body.quest.linkedItem).toEqual(expect.objectContaining({
+      slug: 'rtx-3090-rig',
+      name: 'RTX 3090 PC rig',
+      stockStatus: 'needed',
+    }));
+    expect(mockUpsertCharacterStats).not.toHaveBeenCalled();
+
+    const saved = await request(userApp())
+      .patch(`/api/system/quests/${created.body.quest.id}/budget`)
+      .send({ amountSavedCents: 180000, xpReward: { Developer: 180000 } });
+    expect(saved.status).toBe(400);
+    expect(saved.body.message).toMatch(/does not award XP/);
+    expect(mockUpsertCharacterStats).not.toHaveBeenCalled();
+
+    const budget = await request(userApp())
+      .patch(`/api/system/quests/${created.body.quest.id}/budget`)
+      .send({ amountSavedCents: 45000 });
+    expect(budget.status).toBe(200);
+    expect(budget.body.quest.amountSavedCents).toBe(45000);
+    expect(budget.body.quest.targetCostCents).toBe(180000);
+    expect(budget.body.xpApplied).toEqual([]);
+    expect(mockUpsertCharacterStats).not.toHaveBeenCalled();
+
+    const partial = await request(userApp())
+      .patch(`/api/system/quests/${created.body.quest.id}/progress`)
+      .send({ objectiveId: 'purchase-gpu', progress: 0 });
+    expect(partial.body.xpApplied).toEqual([]);
+
+    const milestone = await request(userApp())
+      .patch(`/api/system/quests/${created.body.quest.id}/progress`)
+      .send({ objectiveId: 'purchase-gpu', progress: 180000 });
+    expect(milestone.status).toBe(200);
+    expect(milestone.body.quest.objectives.find((o: { id: string }) => o.id === 'purchase-gpu'))
+      .toEqual(expect.objectContaining({ progress: 1, done: true }));
+    expect(milestone.body.xpApplied).toEqual([{ className: 'Developer', xp: 40 }]);
+    expect(mockUpsertCharacterStats).toHaveBeenCalledTimes(1);
+    expect(mockUpsertCharacterStats.mock.calls[0][1]).toEqual(expect.objectContaining({
+      class_name: 'Developer',
+      total_xp: 40,
+    }));
+
+    const again = await request(userApp())
+      .patch(`/api/system/quests/${created.body.quest.id}/progress`)
+      .send({ objectiveId: 'purchase-gpu', done: true });
+    expect(again.body.xpApplied).toEqual([]);
+    expect(mockUpsertCharacterStats).toHaveBeenCalledTimes(1);
+
+    const cleared = await request(userApp())
+      .post(`/api/system/quests/${created.body.quest.id}/clear`)
+      .send({ xp: 180000, amountSavedCents: 180000 });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.quest.status).toBe('cleared');
+    expect(cleared.body.xpApplied).toEqual([]);
+    expect(cleared.body.quest.linkedItem.stockStatus).toBe('stocked');
+    expect(mockUpsertCharacterStats).toHaveBeenCalledTimes(1);
+
+    const stored = await getInventoryStore().findBySlug('paul', 'rtx-3090-rig');
+    expect(stored?.stockStatus).toBe('stocked');
+    expect(stored?.acquisitionQuestId).toBe(created.body.quest.id);
+  });
+
+  it('creates the linked tech item from the quest body and does not pay XP for that', async () => {
+    const created = await request(userApp()).post('/api/system/quests').send({
+      idempotencyKey: 'acquisition:inline-rig',
+      kind: 'acquisition',
+      title: 'RTX 3090 PC rig',
+      description: 'Local AI build.',
+      targetCostCents: 180000,
+      inventoryItem: {
+        id: 'rtx-3090-rig',
+        name: 'RTX 3090 PC rig',
+        type: 'equipment',
+        category: 'tech-hardware',
+        icon: '🖥️',
+        unit: 'rig',
+        description: 'Local AI build.',
+        stockStatus: 'needed',
+        priority: 'HIGH',
+      },
+      objectives: [{ id: 'purchase-gpu', label: 'Purchase the RTX 3090', target: 1, xpReward: { Developer: 40 } }],
+      xpReward: {},
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.quest.linkedItem.slug).toBe('rtx-3090-rig');
+    expect(created.body.quest.linkedItem.stockStatus).toBe('needed');
+    expect(mockUpsertCharacterStats).not.toHaveBeenCalled();
+    const stored = await getInventoryStore().findBySlug('paul', 'rtx-3090-rig');
+    expect(stored?.acquisitionQuestId).toBe(created.body.quest.id);
+  });
+
+  it('does not expire an acquisition quest whose target date has passed', async () => {
+    const created = await request(userApp()).post('/api/system/quests').send({
+      idempotencyKey: 'acquisition:open',
+      kind: 'acquisition',
+      title: 'RTX 3090 PC rig',
+      description: 'No deadline.',
+      deadline: '2020-01-01T00:00:00.000Z',
+      targetCostCents: 180000,
+      objectives: [{ id: 'save-target', label: 'Savings goal reached', target: 1, xpReward: { Developer: 25 } }],
+      xpReward: {},
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.quest.status).toBe('active');
+
+    const list = await request(userApp()).get('/api/system/quests?status=active');
+    expect(list.body.quests.map((q: { id: string }) => q.id)).toContain(created.body.quest.id);
+    expect(mockUpsertCharacterStats).not.toHaveBeenCalled();
+  });
+
+  it('rejects acquisition XP that is only a dollar amount, and budget fields on a daily quest', async () => {
+    const empty = await request(userApp()).post('/api/system/quests').send({
+      idempotencyKey: 'acquisition:no-xp',
+      kind: 'acquisition',
+      title: 'RTX 3090 PC rig',
+      targetCostCents: 180000,
+      amountSavedCents: 180000,
+      objectives: [{ id: 'buy', label: 'Buy it', target: 180000 }],
+      xpReward: {},
+    });
+    expect(empty.status).toBe(400);
+    expect(empty.body.message).toMatch(/Dollars saved are not XP/);
+
+    const dailyMoney = await request(userApp()).post('/api/system/quests').send(daily({
+      idempotencyKey: 'daily-money',
+      targetCostCents: 100,
+    }));
+    expect(dailyMoney.status).toBe(400);
+    expect(dailyMoney.body.message).toMatch(/acquisition/);
+    expect(mockUpsertCharacterStats).not.toHaveBeenCalled();
   });
 });

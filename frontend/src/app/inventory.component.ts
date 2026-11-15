@@ -119,10 +119,16 @@ interface CategoryFilter {
                     [attr.data-s]="item.stockStatus"
                     (click)="cycleStock(item, $event)">●</span>
             </div>
-            <span class="i-name" [attr.data-q]="getItemQuality(item)">{{ item.name }}</span>
+            <span class="i-name" [attr.data-q]="getItemQuality(item)">
+              {{ item.name }}
+              <span class="i-quest" *ngIf="item.acquisitionQuest" [attr.data-status]="item.acquisitionQuest.status">
+                {{ item.acquisitionQuest.status === 'cleared' ? 'ACQUIRED' : 'GOAL' }}
+              </span>
+            </span>
             <span class="i-value">{{ item.monthlyCost || '—' }}</span>
           </div>
-          <div class="i-empty" *ngIf="filteredItems.length === 0">No items in this category</div>
+          <div class="i-empty" *ngIf="loadError">{{ loadError }}</div>
+          <div class="i-empty" *ngIf="!loadError && filteredItems.length === 0">No items in this category</div>
         </div>
 
         <!-- Inventory capacity bar -->
@@ -149,6 +155,11 @@ interface CategoryFilter {
         </div>
         <div class="modal-suggestion" *ngIf="selectedItem?.priority">
           Priority: {{ selectedItem?.priority }} — {{ selectedItem?.monthlyCost }}/mo
+        </div>
+        <div class="modal-suggestion" *ngIf="selectedItem?.acquisitionQuest">
+          Linked quest: {{ selectedItem?.acquisitionQuest?.title }}
+          ({{ selectedItem?.acquisitionQuest?.status }}).
+          Clearing it marks this item stocked. Money on the quest does not grant XP.
         </div>
         <div class="modal-buttons">
           <button class="btn btn-primary" (click)="confirmUsage()">Log Usage</button>
@@ -297,6 +308,13 @@ interface CategoryFilter {
     .i-stock[data-s="needed"]  { color: #e07070; }
 
     .i-name { flex: 1; font-size: 12px; font-family: 'Cinzel', serif; }
+    .i-quest {
+      margin-left: 6px;
+      font-size: 9px;
+      letter-spacing: 0.12em;
+      color: var(--eso-gold, #c9a84c);
+    }
+    .i-quest[data-status="cleared"] { color: #6fcf7d; }
     .i-name[data-q="common"]    { color: #c8c8c8; }
     .i-name[data-q="uncommon"]  { color: #6fcf7d; }
     .i-name[data-q="rare"]      { color: #5b9cf6; }
@@ -394,6 +412,7 @@ export class InventoryComponent implements OnInit, OnDestroy {
   characterLevel = 20;
 
   items: InventoryItem[] = [];
+  loadError: string | null = null;
   budgetData: BudgetPhase[] = [];
   currentAction: any = null;
 
@@ -431,7 +450,8 @@ export class InventoryComponent implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     this.subscriptions.push(
-      this.inventoryService.getItems().subscribe(items => this.items = items)
+      this.inventoryService.getItems().subscribe(items => this.items = items),
+      this.inventoryService.getLoadError().subscribe(error => this.loadError = error),
     );
     this.subscriptions.push(
       this.actionTracker.getCurrentAction().subscribe(action => this.currentAction = action)

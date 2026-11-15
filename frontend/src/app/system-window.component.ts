@@ -49,10 +49,23 @@ import { SystemQuest, SystemQuestService, formatCountdown } from './system-quest
           <ul class="sys-objectives">
             <li *ngFor="let objective of quest.objectives" [class.done]="objective.done">
               <span class="sys-obj-label">{{ objective.label }}</span>
+              <span class="sys-obj-xp" *ngIf="objectiveXp(objective)">{{ objectiveXp(objective) }}</span>
               <span class="sys-obj-count">{{ objective.progress }}/{{ objective.target }}</span>
               <span class="sys-bar"><span [style.width.%]="objectivePct(objective)"></span></span>
             </li>
           </ul>
+
+          <div class="sys-budget" *ngIf="quest.kind === 'acquisition'" data-testid="acquisition-budget">
+            <div class="sys-rewards">
+              <span class="sys-label">Budget</span>
+              <span>{{ formatUsd(quest.amountSavedCents) }} saved of {{ formatUsd(quest.targetCostCents) }}</span>
+            </div>
+            <span class="sys-bar" *ngIf="quest.targetCostCents"><span [style.width.%]="budgetPct(quest)"></span></span>
+            <p class="sys-budget-note" data-testid="acquisition-budget-note">Saving or spending does not grant XP.</p>
+            <p class="sys-linked" *ngIf="quest.linkedItem" data-testid="acquisition-item">
+              Item: {{ quest.linkedItem.name }} · {{ quest.linkedItem.stockStatus || 'untracked' }}
+            </p>
+          </div>
 
           <div class="sys-rewards" *ngIf="rewardLines(quest).length">
             <span class="sys-label">Reward</span>
@@ -159,6 +172,10 @@ import { SystemQuest, SystemQuestService, formatCountdown } from './system-quest
     .sys-card[data-kind="emergency"] { border-color: rgba(255, 120, 120, 0.7); }
     .sys-card[data-kind="penalty"] { border-color: rgba(255, 176, 92, 0.7); }
     .sys-card[data-kind="hidden"] { border-color: rgba(176, 140, 255, 0.7); }
+    .sys-card[data-kind="acquisition"] { border-color: rgba(242, 201, 106, 0.75); }
+    .sys-obj-xp { margin-left: 8px; color: #9dffa8; font-size: 12px; }
+    .sys-budget { margin-top: 10px; padding: 10px; border: 1px solid rgba(242, 201, 106, 0.45); }
+    .sys-budget-note, .sys-linked { margin: 6px 0 0; color: #d7c59a; font-family: 'Open Sans', sans-serif; font-size: 13px; }
     .sys-desc, .sys-sealed, .sys-cred p, .sys-note { color: #b7c9e8; font-family: 'Open Sans', sans-serif; font-size: 14px; }
     .sys-flag { color: #ffd27a; font-size: 13px; }
     .sys-objectives { list-style: none; padding: 0; margin: 12px 0; }
@@ -219,7 +236,26 @@ export class SystemWindowComponent implements OnInit, OnDestroy {
   }
 
   countdown(quest: SystemQuest): string {
+    if (quest.kind === 'acquisition' && !quest.deadline) return 'Open-ended';
     return formatCountdown(quest.deadline, this.now());
+  }
+
+  formatUsd(cents: number | null | undefined): string {
+    if (cents == null) return 'no target';
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
+  }
+
+  budgetPct(quest: SystemQuest): number {
+    if (!quest.targetCostCents) return 0;
+    return Math.min(100, Math.round(((quest.amountSavedCents ?? 0) / quest.targetCostCents) * 100));
+  }
+
+  objectiveXp(objective: SystemQuest['objectives'][number]): string {
+    const parts = Object.entries(objective.xpReward ?? {})
+      .filter(([, xp]) => xp > 0)
+      .map(([className, xp]) => `+${xp} ${className}`);
+    if (!parts.length) return '';
+    return objective.xpAwardedAt ? `${parts.join(', ')} paid` : parts.join(', ');
   }
 
   rewardLines(quest: SystemQuest): { className: string; xp: number }[] {

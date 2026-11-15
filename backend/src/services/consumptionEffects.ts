@@ -18,6 +18,8 @@ export interface AlcoholDose {
   abvPercent: number;
   itemName: string;
   hoursUntilBed: number;
+  /** Food-log id this pour came from. Doses logged before edits existed omit it. */
+  entryId?: string;
 }
 
 export interface CaffeineDose {
@@ -25,18 +27,21 @@ export interface CaffeineDose {
   mg: number;
   itemName: string;
   hoursUntilBed: number;
+  entryId?: string;
 }
 
 export interface SugarDose {
   at: string;
   grams: number;
   itemName: string;
+  entryId?: string;
 }
 
 export interface SupplementDose {
   at: string;
   amount: number;
   itemName: string;
+  entryId?: string;
 }
 
 export interface EffectDraft {
@@ -59,6 +64,8 @@ export interface EffectDraft {
 export interface ConsumptionSignals {
   itemName: string;
   consumedAt: string;
+  /** Food-log id stamped onto doses so a later edit replaces this entry instead of stacking a second one. */
+  entryId?: string;
   waterOz?: number;
   caffeineMg?: number;
   addedSugarG?: number;
@@ -618,39 +625,48 @@ function pushDose<T extends { at: string }>(existing: T[], dose: T | null): T[] 
   return dose ? [...existing, dose] : existing;
 }
 
+function withEntryId<T extends { at: string }>(dose: T | null, entryId?: string): T | null {
+  if (!dose || !entryId) return dose;
+  return { ...dose, entryId };
+}
+
 export function planConsumptionEffects(signals: ConsumptionSignals, ctx: EffectContext): EffectDraft[] {
   const cfg = ctx.config ?? resolveConsumptionConfig();
-  const hours = hoursUntilBedtime(ctx.now, ctx.bedtime, ctx.timeZone);
+  // Bedtime proximity belongs to the dose's own clock, not the projection clock.
+  // Create passes the same instant for both. An edit can project a merged stack
+  // at a later dose while the corrected row keeps the proximity it was eaten at.
+  const doseAt = new Date(signals.consumedAt);
+  const hours = hoursUntilBedtime(Number.isNaN(doseAt.getTime()) ? ctx.now : doseAt, ctx.bedtime, ctx.timeZone);
   const drafts: EffectDraft[] = [];
 
   const alcoholDrinks = signals.alcohol
     ? standardDrinks(signals.alcohol.volumeOz, signals.alcohol.abvPercent, cfg.alcohol.ozEthanolPerStandardDrink)
     : 0;
-  const alcoholDoses = pushDose(ctx.alcoholDoses, alcoholDrinks > 0 ? {
+  const alcoholDoses = pushDose(ctx.alcoholDoses, withEntryId(alcoholDrinks > 0 ? {
     at: signals.consumedAt,
     standardDrinks: alcoholDrinks,
     volumeOz: signals.alcohol!.volumeOz,
     abvPercent: signals.alcohol!.abvPercent,
     itemName: signals.itemName,
     hoursUntilBed: hours,
-  } : null);
+  } : null, signals.entryId));
   const alcohol = projectAlcohol(alcoholDoses, ctx.now, cfg);
   if (alcohol) drafts.push(alcohol);
 
-  const caffeineDoses = pushDose(ctx.caffeineDoses, (signals.caffeineMg ?? 0) > 0 ? {
+  const caffeineDoses = pushDose(ctx.caffeineDoses, withEntryId((signals.caffeineMg ?? 0) > 0 ? {
     at: signals.consumedAt,
     mg: signals.caffeineMg!,
     itemName: signals.itemName,
     hoursUntilBed: hours,
-  } : null);
+  } : null, signals.entryId));
   const caffeine = projectCaffeine(caffeineDoses, ctx.now, cfg);
   if (caffeine) drafts.push(caffeine);
 
-  const sugarDoses = pushDose(ctx.sugarDoses, (signals.addedSugarG ?? 0) > 0 ? {
+  const sugarDoses = pushDose(ctx.sugarDoses, withEntryId((signals.addedSugarG ?? 0) > 0 ? {
     at: signals.consumedAt,
     grams: signals.addedSugarG!,
     itemName: signals.itemName,
-  } : null);
+  } : null, signals.entryId));
   const sugar = projectSugar(sugarDoses, ctx.now, cfg);
   if (sugar) drafts.push(sugar);
 
@@ -661,7 +677,12 @@ export function planConsumptionEffects(signals: ConsumptionSignals, ctx: EffectC
     const extra = (signals.supplements ?? []).filter(s => s.key === key && s.amount > 0);
     return [
       ...existing,
-      ...extra.map(s => ({ at: signals.consumedAt, amount: s.amount, itemName: signals.itemName })),
+      ...extra.map(s => ({
+        at: signals.consumedAt,
+        amount: s.amount,
+        itemName: signals.itemName,
+        ...(signals.entryId ? { entryId: signals.entryId } : {}),
+      })),
     ];
   };
 

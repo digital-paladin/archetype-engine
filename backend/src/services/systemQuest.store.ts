@@ -146,6 +146,9 @@ function rowToQuest(row: Record<string, unknown>): SystemQuestRecord {
     thursdayTrainingFlag: row.thursday_training_flag === true,
     recoveryType: (row.recovery_type as RecoveryType | null) ?? null,
     parentQuestId: row.parent_quest_id ? String(row.parent_quest_id) : null,
+    targetCostCents: row.target_cost_cents == null ? null : Number(row.target_cost_cents),
+    amountSavedCents: row.amount_saved_cents == null ? 0 : Number(row.amount_saved_cents),
+    inventoryItemId: row.inventory_item_id ? String(row.inventory_item_id) : null,
     resolution: (row.resolution as QuestResolution | null) ?? null,
     edits: parseEdits(row.edits),
     createdAt: new Date(String(row.created_at)).toISOString(),
@@ -207,7 +210,28 @@ function questToRow(quest: SystemQuestRecord): Record<string, unknown> {
   // Omit an empty history so creates, progress, and resolution still write
   // against a database that has not applied the edits column yet.
   if (quest.edits && quest.edits.length > 0) row.edits = quest.edits;
+  // Daily/emergency rows omit the acquisition columns so they still insert
+  // before migration 014. Acquisition rows always send them.
+  if (
+    quest.kind === 'acquisition'
+    || quest.targetCostCents != null
+    || quest.amountSavedCents > 0
+    || quest.inventoryItemId
+  ) {
+    row.target_cost_cents = quest.targetCostCents;
+    row.amount_saved_cents = quest.amountSavedCents;
+    row.inventory_item_id = quest.inventoryItemId;
+  }
   return row;
+}
+
+/** Column mapping used by Supabase. Exported so tests can lock the omit rules. */
+export function questRowFromRecord(quest: SystemQuestRecord): Record<string, unknown> {
+  return questToRow(quest);
+}
+
+export function questRecordFromRow(row: Record<string, unknown>): SystemQuestRecord {
+  return rowToQuest(row);
 }
 
 function rowToMessage(row: Record<string, unknown>): SystemMessageRecord {

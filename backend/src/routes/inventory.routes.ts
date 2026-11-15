@@ -1,7 +1,76 @@
 import { Router, Request, Response } from 'express';
+import { InventoryError } from '../domain/inventory';
 import { getDataService } from '../services/data/dataService';
+import {
+  createInventoryItem,
+  listInventory,
+  setInventoryEquipped,
+  updateInventoryItem,
+} from '../services/inventory.service';
 
 const router = Router();
+
+function userIdOf(req: Request): string {
+  const userId = (req as Request & { userId?: string }).userId;
+  if (!userId) {
+    const err = new InventoryError('unauthorized', 'Unauthorized', 401);
+    throw err;
+  }
+  return userId;
+}
+
+function sendError(res: Response, err: unknown): void {
+  if (err instanceof InventoryError) {
+    res.status(err.status).json({ success: false, error: err.code, message: err.message });
+    return;
+  }
+  console.error('[INVENTORY]', err instanceof Error ? err.message : err);
+  res.status(500).json({
+    success: false,
+    error: 'internal',
+    message: err instanceof Error ? err.message : 'Unknown error',
+  });
+}
+
+/**
+ * GET /api/inventory
+ * Copies catalog defaults the user does not already have, then returns their items.
+ */
+router.get('/', async (req: Request, res: Response) => {
+  try {
+    const items = await listInventory(userIdOf(req));
+    res.json({ success: true, items });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+/**
+ * POST /api/inventory
+ * Create a runtime item. `id` is the stable slug. The response `rowId` is what
+ * an acquisition quest stores as inventoryItemId.
+ */
+router.post('/', async (req: Request, res: Response) => {
+  try {
+    const item = await createInventoryItem(userIdOf(req), req.body ?? {});
+    res.status(201).json({ success: true, item });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
+
+/**
+ * PATCH /api/inventory/:id
+ * `:id` is the slug. Stock, name, and labels only — this route does not award XP.
+ */
+router.patch('/:id', async (req: Request, res: Response) => {
+  try {
+    const item = await updateInventoryItem(userIdOf(req), req.params.id, req.body ?? {});
+    res.json({ success: true, item });
+  } catch (err) {
+    sendError(res, err);
+  }
+});
 
 /**
  * GET /api/inventory/equipped
@@ -9,7 +78,7 @@ const router = Router();
  */
 router.get('/equipped', async (req: Request, res: Response) => {
   try {
-    const userId = (req as any).userId as string;
+    const userId = (req as Request & { userId?: string }).userId;
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 
     const db = getDataService();
@@ -29,7 +98,7 @@ router.get('/equipped', async (req: Request, res: Response) => {
  */
 router.post('/toggle-equip/:itemId', async (req: Request, res: Response) => {
   try {
-    const userId = (req as any).userId as string;
+    const userId = (req as Request & { userId?: string }).userId;
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 
     const { itemId } = req.params;
@@ -48,6 +117,12 @@ router.post('/toggle-equip/:itemId', async (req: Request, res: Response) => {
     await db.upsertCharacterProfile(userId, {
       rpg_stats: { ...currentRpgStats, equipped_armor: updatedEquipped },
     });
+
+    try {
+      await setInventoryEquipped(userId, itemId, !isEquipped);
+    } catch (err) {
+      console.error('[INVENTORY] item equipped flag was not synced:', err instanceof Error ? err.message : err);
+    }
 
     console.log(`[INVENTORY] ${isEquipped ? 'Unequipped' : 'Equipped'} item ${itemId} for user ${userId}`);
     res.json({ success: true, itemId, equipped: !isEquipped, equippedArmor: updatedEquipped });

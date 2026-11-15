@@ -30,6 +30,10 @@ export function toCanonicalClassName(rawClass: string): string {
     survivalist:            'Survivalist',
     prayer:                 'Sage',
     general:                'Sage',
+    social:                 'Social',
+    'social-dynamics':      'Social Dynamics',
+    'social dynamics':      'Social Dynamics',
+    charisma:               'Charisma',
     Developer:              'Developer',
     Warrior:                'Warrior',
     Sage:                   'Sage',
@@ -37,6 +41,9 @@ export function toCanonicalClassName(rawClass: string): string {
     Redteamer:              'Redteamer',
     'Financial Strategist': 'Financial Strategist',
     Survivalist:            'Survivalist',
+    Social:                 'Social',
+    'Social Dynamics':      'Social Dynamics',
+    Charisma:               'Charisma',
   };
   return map[rawClass] ?? (rawClass.charAt(0).toUpperCase() + rawClass.slice(1));
 }

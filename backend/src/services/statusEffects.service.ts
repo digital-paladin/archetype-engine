@@ -109,6 +109,61 @@ export async function applyEffectDraft(userId: string, draft: EffectDraft, now =
   return store.insert(userId, effect);
 }
 
+/**
+ * Write one auto effect at an explicit projection time.
+ * `projectionNow` is the instant the dose math was evaluated (usually the
+ * meal's own timestamp, or the latest dose in a merged stack). Expiry is
+ * that instant plus the draft duration, so a correction does not grant a
+ * fresh window measured from the wall clock.
+ * `scheduleFrom` keeps an existing row's applied/expiry window and only
+ * replaces the modifiers — used when a daily protein or hydration total
+ * changes but the buff should not be extended.
+ */
+export async function applyCorrectionDraft(
+  userId: string,
+  draft: EffectDraft,
+  projectionNow: Date,
+  scheduleFrom?: StatusEffect | null,
+): Promise<StatusEffect | null> {
+  if (draft.remove) {
+    await removeEffectByKey(userId, draft.effectKey);
+    return null;
+  }
+  const store = getStatusEffectStore();
+  const existing = await store.findByKey(userId, draft.effectKey);
+  const preserved = scheduleFrom ?? null;
+  const appliedAt = preserved ? preserved.appliedAt : projectionNow.toISOString();
+  const expiresAt = preserved
+    ? preserved.expiresAt
+    : draft.duration === -1
+      ? null
+      : new Date(projectionNow.getTime() + draft.duration * 60 * 1000).toISOString();
+  const duration = preserved
+    ? preserved.duration
+    : draft.duration === -1
+      ? -1
+      : Math.max(1, draft.duration);
+  const effect: StatusEffect = {
+    id: existing?.id ?? randomUUID(),
+    name: draft.name,
+    type: draft.type,
+    category: draft.category,
+    source: draft.source,
+    icon: draft.icon,
+    effects: draft.effects,
+    appliedAt,
+    duration,
+    expiresAt,
+    notes: draft.notes,
+    dose: draft.dose,
+    effectKey: draft.effectKey,
+    autoApplied: true,
+    meta: draft.meta,
+  };
+  if (existing) return store.update(userId, effect);
+  return store.insert(userId, effect);
+}
+
 // ── Auto-managed "Sleep Deprived" debuff ────────────────────────────────────
 
 const SLEEP_DEPRIVED_NAME = 'Sleep Deprived';

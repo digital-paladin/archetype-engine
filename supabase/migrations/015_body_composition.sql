@@ -10,7 +10,7 @@
 -- Railway deploys the backend from main and does not run this SQL.
 -- Apply before posting readings:
 --
---   node backend/scripts/apply-migration.js supabase/migrations/014_body_composition.sql
+--   node backend/scripts/apply-migration.js supabase/migrations/015_body_composition.sql
 
 CREATE TABLE IF NOT EXISTS body_composition_readings (
   id                           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
