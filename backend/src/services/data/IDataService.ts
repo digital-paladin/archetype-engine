@@ -72,6 +72,11 @@ export interface JournalEntry {
   spo2_pct?: number;
   /** Provenance for the optional vitals columns. */
   vitals_source?: 'hume' | 'fitbit' | 'oura' | 'manual';
+  /**
+   * Screenshot or app-record reference for a manual Hume Band vital.
+   * Resting HR and HRV never pay XP. A manual entry with no reference is stored either way.
+   */
+  vitals_proof_ref?: string | null;
   fasting_hours?: number;
   hydration_oz?: number;
   protein_level?: 'low' | 'medium' | 'high';

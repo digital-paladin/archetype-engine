@@ -5,6 +5,56 @@ import {
 } from './sleepDebt.service';
 import { isMeetingActivityType, isSocialActivityType } from '../config/socialXp.config';
 
+/**
+ * Wearable XP amounts are the baseXP values on the recovery-wearable-* entries.
+ * These names and thresholds are the only place those rules are written down.
+ */
+export const WEARABLE_XP_TYPES = {
+  sleepDuration: 'recovery-wearable-sleep',
+  sleepScore: 'recovery-wearable-sleep-score',
+  readinessAdherence: 'recovery-wearable-readiness-adherence',
+  steps8k: 'recovery-wearable-steps-8k',
+  steps10k: 'recovery-wearable-steps-10k',
+  humeScan: 'recovery-wearable-hume-scan',
+  humeTrend: 'recovery-wearable-hume-trend',
+} as const;
+
+export const WEARABLE_XP_RULES = {
+  /** Hours of sleep required before any sleep XP. */
+  sleepMinHours: 7,
+  /** Sleep score that adds the score bonus on top of a 7h night. */
+  sleepScoreMin: 80,
+  /** Sleep duration bonus and score bonus together cannot exceed this. */
+  sleepMaxPerNight: 15,
+  /** Oura readiness at or above this applies the Well-Rested buff. The score pays no XP. */
+  readinessWellRestedMin: 85,
+  /** Oura readiness below this applies the Fatigued debuff. 70 itself does neither. */
+  readinessFatiguedBelow: 70,
+  /** Google Health steps for the smaller Warrior award. */
+  steps8k: 8000,
+  /** Google Health steps for the larger Warrior award. Replaces the 8k award. */
+  steps10k: 10000,
+  /** Steps cannot pay more than this in a civil day. */
+  stepsMaxPerDay: 10,
+  /** Sleep + readiness adherence + steps. Workouts and Hume scans are outside this. */
+  passiveDailyCap: 40,
+  /** Award dates may be today or this many Chicago calendar days earlier. */
+  backfillDays: 3,
+  /**
+   * An Oura, manual, or other session whose overlap with an already-awarded
+   * session is at least this fraction of its own duration is the same session.
+   */
+  workoutSameSessionOverlap: 0.5,
+  /** Distinct ISO weeks of comparable Hume scans required for the monthly trend. */
+  humeTrendWeeks: 4,
+} as const;
+
+const WEARABLE_XP_TYPE_SET = new Set<string>(Object.values(WEARABLE_XP_TYPES));
+
+export function isWearableXpType(activityType: string): boolean {
+  return WEARABLE_XP_TYPE_SET.has(activityType);
+}
+
 export interface ClassXpAward {
   /** Canonical class name used in journal entries (e.g. 'Artist', 'Sage', 'Developer') */
   class: string;
@@ -109,6 +159,19 @@ export class XpCalculatorService {
     'recovery-session-as-planned':  { baseXP: 10 },   // Session As Planned (bonus per scheduled session done)
     'recovery-consistency-bonus':   { baseXP: 50 },   // 10 of ~13 planned sessions in 14 days
 
+    // Wearable metric awards (Nov 13 2026). Flat XP. Thresholds, caps, and
+    // which device may pay live in WEARABLE_XP_RULES and wearableMetricXp.ts.
+    // The `recovery-wearable-` prefix routes these to Warrior and keeps them
+    // out of isTrainingActivity, so a step day does not cancel Thursday rest.
+    // They are not recovery quests: validateRecoveryActivity rejects the names.
+    'recovery-wearable-sleep':                  { baseXP: 10 }, // 7h+ sleep
+    'recovery-wearable-sleep-score':            { baseXP: 5 },  // score >= 80, on top of the 7h award
+    'recovery-wearable-readiness-adherence':    { baseXP: 10 }, // lighter plan kept on a fatigued day
+    'recovery-wearable-steps-8k':               { baseXP: 5 },  // 8,000+ steps, Google Health only
+    'recovery-wearable-steps-10k':              { baseXP: 10 }, // 10,000+ steps (replaces the 8k award)
+    'recovery-wearable-hume-scan':              { baseXP: 15 }, // one body-composition scan per ISO week
+    'recovery-wearable-hume-trend':             { baseXP: 25 }, // four comparable weeks, once per month
+
     // Admin activities (Sage/Developer class — low rate to prevent XP farming)
     // Quest planning, calendar events, sprint planning, task management
     'admin-planning': { baseXP: 5, durationMultiplier: 0.08 },
@@ -184,12 +247,14 @@ export class XpCalculatorService {
    * Get list of available activity types.
    */
   getActivityTypes(): Array<{ type: string; category: string; baseXP: number; multiClass?: boolean }> {
-    return Object.entries(this.activityXP).map(([type, config]) => ({
-      type,
-      category: this.getCategoryFromActivity(type),
-      baseXP: config.baseXP,
-      ...(config.multiClassXP && { multiClass: true }),
-    }));
+    return Object.entries(this.activityXP)
+      .filter(([type]) => !isWearableXpType(type))
+      .map(([type, config]) => ({
+        type,
+        category: this.getCategoryFromActivity(type),
+        baseXP: config.baseXP,
+        ...(config.multiClassXP && { multiClass: true }),
+      }));
   }
 
   // ── Consolidation Formula Methods ──────────────────────────────────────────
