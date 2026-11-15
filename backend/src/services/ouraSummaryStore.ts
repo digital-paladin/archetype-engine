@@ -82,6 +82,20 @@ export async function getOuraSyncStatus(userId: string): Promise<OuraSyncStatusR
   return data ?? null;
 }
 
+export async function getOuraSummaryByDate(
+  userId: string,
+  summaryDate: string,
+): Promise<OuraSummaryRecord | null> {
+  const { data, error } = await getSupabaseAdmin()
+    .from('oura_daily_summaries')
+    .select('user_id, summary_date, timezone, sleep, readiness, activity, provenance, partial, no_data, synced_at')
+    .eq('user_id', userId)
+    .eq('summary_date', summaryDate)
+    .maybeSingle();
+  if (error) throw mapOuraStorageError(error);
+  return data ?? null;
+}
+
 export async function getLatestOuraSummary(userId: string): Promise<OuraSummaryRecord | null> {
   const { data, error } = await getSupabaseAdmin()
     .from('oura_daily_summaries')

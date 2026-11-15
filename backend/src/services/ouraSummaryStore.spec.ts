@@ -2,6 +2,7 @@ import { OuraError } from './ouraErrors';
 import {
   deleteOuraUserData,
   getLatestOuraSummary,
+  getOuraSummaryByDate,
   mapOuraStorageError,
   upsertOuraSummary,
 } from './ouraSummaryStore';
@@ -70,6 +71,14 @@ describe('Oura summary store', () => {
     });
     expect(calls[0].args[1]).toEqual({ onConflict: 'user_id,summary_date' });
     expect((calls[0].args[0] as { user_id: string }).user_id).toBe('user-1');
+  });
+
+  it('reads one summary by user and date', async () => {
+    await expect(getOuraSummaryByDate('user-1', '2026-11-15')).resolves.toBeNull();
+    expect(calls).toEqual(expect.arrayContaining([
+      { table: 'oura_daily_summaries', op: 'eq', args: ['user_id', 'user-1'] },
+      { table: 'oura_daily_summaries', op: 'eq', args: ['summary_date', '2026-11-15'] },
+    ]));
   });
 
   it('reads and deletes only the requested user', async () => {

@@ -19,6 +19,9 @@ import {
   updateQuestProgress,
 } from '../services/systemQuest.service';
 import { ConsumptionError, correctConsumption, listConsumption, logConsumption } from '../services/consumption.service';
+import { readCaffeineSleepFlag } from '../services/caffeineRule';
+import { chicagoDay } from '../services/activityOccurredAt';
+import { isRealIsoDate } from '../services/recoveryQuests.service';
 import { getDataService } from '../services/data/dataService';
 import type { CharacterStats } from '../services/data/IDataService';
 import { BodyCompositionError } from '../domain/bodyComposition';
@@ -224,6 +227,32 @@ router.get('/body-composition', async (req: Request, res: Response) => {
     res.json({ success: true, readings });
   } catch (err) {
     if (sendBodyCompositionError(res, err)) return;
+    sendError(res, err);
+  }
+});
+
+/**
+ * GET /api/system/caffeine-sleep-flag?date=YYYY-MM-DD
+ * One line when that night's sleep score is under 70 and caffeine was logged
+ * at or after 2:00 PM America/Chicago the prior day. xpDelta is always 0.
+ * `date` is the sleep night (Oura summary day). It defaults to today in Chicago.
+ */
+router.get('/caffeine-sleep-flag', async (req: Request, res: Response) => {
+  try {
+    const { userId } = authOf(req);
+    const raw = typeof req.query.date === 'string' ? req.query.date.trim() : '';
+    const date = raw || chicagoDay(new Date());
+    if (!isRealIsoDate(date)) {
+      res.status(400).json({
+        success: false,
+        error: 'invalid_date',
+        message: 'date must be YYYY-MM-DD',
+      });
+      return;
+    }
+    const flag = await readCaffeineSleepFlag(userId, date);
+    res.json({ success: true, ...flag });
+  } catch (err) {
     sendError(res, err);
   }
 });
