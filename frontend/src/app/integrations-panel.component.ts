@@ -4,13 +4,29 @@ import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
 import { environment } from '../environments/environment';
 import { WearableConnectService, WearableProviderStatus } from './wearable-connect.service';
-import { WEARABLE_PROVIDERS, wearableStatusLabel } from './wearable-providers';
+import {
+  formatOuraLatest,
+  OuraLatestView,
+  ouraSyncLabel,
+  WEARABLE_PROVIDERS,
+  wearableStatusLabel,
+} from './wearable-providers';
 
 interface TodoistConnectStatus {
   success: boolean;
   connected: boolean;
   source: 'user' | 'env' | null;
   masked: string | null;
+  error?: string;
+}
+
+interface OuraStatusResponse {
+  success?: boolean;
+  configured?: boolean | null;
+  connected?: boolean | null;
+  lastSyncAt?: string | null;
+  lastSyncDetail?: string | null;
+  latest?: OuraLatestView | null;
   error?: string;
 }
 
@@ -24,6 +40,9 @@ interface WearableRow {
   connected: boolean;
   busy: boolean;
   error: string | null;
+  lastSyncLabel: string | null;
+  latestLabel: string | null;
+  syncMessage: string | null;
 }
 
 function wearableRowsFromRegistry(): WearableRow[] {
@@ -37,6 +56,9 @@ function wearableRowsFromRegistry(): WearableRow[] {
     connected: false,
     busy: false,
     error: null,
+    lastSyncLabel: null,
+    latestLabel: null,
+    syncMessage: null,
   }));
 }
 
@@ -59,6 +81,12 @@ function wearableRowsFromRegistry(): WearableRow[] {
             <p class="muted wearable-copy">{{ row.note }}</p>
           }
           <p class="status-row">{{ row.statusLabel }}</p>
+          @if (row.lastSyncLabel) {
+            <p class="muted" [id]="'wearable-' + row.id + '-sync-status'">{{ row.lastSyncLabel }}</p>
+          }
+          @if (row.latestLabel) {
+            <p class="muted" [id]="'wearable-' + row.id + '-latest'">{{ row.latestLabel }}</p>
+          }
           <button
             type="button"
             class="btn primary wearable-action"
@@ -68,6 +96,29 @@ function wearableRowsFromRegistry(): WearableRow[] {
           >
             {{ row.connected ? 'Reconnect' : 'Connect' }}
           </button>
+          @if (row.id === 'oura' && row.connected) {
+            <button
+              type="button"
+              class="btn wearable-action"
+              id="wearable-oura-sync"
+              [disabled]="row.busy"
+              (click)="syncOura()"
+            >
+              Sync Oura
+            </button>
+            <button
+              type="button"
+              class="btn wearable-action"
+              id="wearable-oura-disconnect"
+              [disabled]="row.busy"
+              (click)="disconnectOura()"
+            >
+              Disconnect
+            </button>
+          }
+          @if (row.syncMessage) {
+            <p class="muted" [id]="'wearable-' + row.id + '-sync-result'">{{ row.syncMessage }}</p>
+          }
           @if (row.error) {
             <p class="err" [id]="'wearable-' + row.id + '-error'">{{ row.error }}</p>
           }
@@ -219,7 +270,10 @@ export class IntegrationsPanelComponent implements OnInit {
   refreshWearables(): void {
     this.wearablesError.set(null);
     this.wearables.status().subscribe({
-      next: (statuses) => this.applyWearableStatus(statuses),
+      next: (statuses) => {
+        this.applyWearableStatus(statuses);
+        this.refreshOuraStatus();
+      },
       error: (err) => {
         this.wearablesError.set(err?.error?.error || 'Could not load wearable status');
         this.wearableRows.update((rows) => rows.map((row) => ({
@@ -246,6 +300,47 @@ export class IntegrationsPanelComponent implements OnInit {
     });
   }
 
+  syncOura(): void {
+    this.patchWearable('oura', { busy: true, error: null, syncMessage: null });
+    this.http.post<{ success: boolean; detail?: string; error?: string }>(
+      `${environment.apiUrl}/api/oura/sync`,
+      {},
+    ).subscribe({
+      next: (body) => {
+        this.patchWearable('oura', { busy: false, syncMessage: body.detail || 'Oura sync finished.' });
+        this.refreshWearables();
+      },
+      error: (err) => {
+        this.patchWearable('oura', {
+          busy: false,
+          error: err?.error?.error || 'Oura sync failed.',
+        });
+      },
+    });
+  }
+
+  disconnectOura(): void {
+    this.patchWearable('oura', { busy: true, error: null });
+    this.http.delete<{ success: boolean }>(`${environment.apiUrl}/api/oura/connection`).subscribe({
+      next: () => {
+        this.patchWearable('oura', {
+          busy: false,
+          connected: false,
+          syncMessage: null,
+          lastSyncLabel: null,
+          latestLabel: null,
+        });
+        this.refreshWearables();
+      },
+      error: (err) => {
+        this.patchWearable('oura', {
+          busy: false,
+          error: err?.error?.error || 'Oura disconnect failed.',
+        });
+      },
+    });
+  }
+
   disconnect(): void {
     this.busy.set(true);
     this.error.set(null);
@@ -259,6 +354,32 @@ export class IntegrationsPanelComponent implements OnInit {
       error: (err) => {
         this.busy.set(false);
         this.error.set(err?.error?.error || 'Disconnect failed');
+      },
+    });
+  }
+
+  private refreshOuraStatus(): void {
+    this.http.get<OuraStatusResponse>(`${environment.apiUrl}/api/oura/status`).subscribe({
+      next: (body) => {
+        const connected = !!body.connected;
+        this.patchWearable('oura', {
+          connected,
+          statusLabel: wearableStatusLabel({
+            configured: typeof body.configured === 'boolean' ? body.configured : null,
+            connected: typeof body.connected === 'boolean' ? body.connected : null,
+          }),
+          lastSyncLabel: ouraSyncLabel({
+            connected,
+            lastSyncAt: body.lastSyncAt,
+            lastSyncDetail: body.lastSyncDetail,
+          }),
+          latestLabel: formatOuraLatest(body.latest),
+        });
+      },
+      error: (err) => {
+        this.patchWearable('oura', {
+          error: err?.error?.error || 'Could not load Oura status',
+        });
       },
     });
   }

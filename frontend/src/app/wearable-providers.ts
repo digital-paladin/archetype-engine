@@ -33,7 +33,8 @@ export const WEARABLE_PROVIDERS: readonly WearableProvider[] = [
   {
     id: 'oura',
     title: 'Oura',
-    description: 'Sleep and readiness from an Oura Ring.',
+    description: 'Daily sleep, readiness, and activity summaries from an Oura account.',
+    note: 'Readiness is stored as Oura sent it. It does not award XP, create workouts, or give medical advice. Connecting before a ring is paired is fine.',
     connectMode: 'connect-url',
     connectPath: '/api/oura/connect-url',
     notConfiguredMessage: 'Oura is not configured yet.',
@@ -68,6 +69,52 @@ export function wearableProvider(id: string): WearableProvider {
     throw new Error(`Unknown wearable provider: ${id}`);
   }
   return found;
+}
+
+export interface OuraLatestView {
+  date: string;
+  timezone?: string | null;
+  noData?: boolean;
+  sleep?: { score?: number | null; hours?: number | null } | null;
+  readiness?: { score?: number | null } | null;
+  activity?: { score?: number | null; steps?: number | null } | null;
+}
+
+export interface OuraSyncSnapshot {
+  connected: boolean | null;
+  lastSyncAt?: string | null;
+  lastSyncDetail?: string | null;
+}
+
+/** Server-written detail wins. Otherwise explain a connection that has never synced. */
+export function ouraSyncLabel(status: OuraSyncSnapshot | null): string | null {
+  if (!status) return null;
+  if (status.lastSyncDetail) return status.lastSyncDetail;
+  if (status.connected && !status.lastSyncAt) {
+    return 'Connected. No sync yet. An account with no paired ring has nothing to ingest until Oura publishes a daily summary.';
+  }
+  return null;
+}
+
+/** Compact line for the latest stored summaries. Not a new score. */
+export function formatOuraLatest(latest: OuraLatestView | null | undefined): string | null {
+  if (!latest || latest.noData) return null;
+  const parts: string[] = [];
+  if (latest.sleep && (latest.sleep.score != null || latest.sleep.hours != null)) {
+    const score = latest.sleep.score == null ? 'no score' : `score ${latest.sleep.score}`;
+    const hours = latest.sleep.hours == null ? 'hours unavailable' : `${latest.sleep.hours} h`;
+    parts.push(`Sleep ${score}, ${hours}`);
+  }
+  if (latest.readiness?.score != null) parts.push(`Readiness ${latest.readiness.score}`);
+  if (latest.activity && (latest.activity.steps != null || latest.activity.score != null)) {
+    const bits: string[] = [];
+    if (latest.activity.score != null) bits.push(`score ${latest.activity.score}`);
+    if (latest.activity.steps != null) bits.push(`${latest.activity.steps} steps`);
+    parts.push(`Activity ${bits.join(', ')}`);
+  }
+  if (parts.length === 0) return null;
+  const tz = latest.timezone ? ` (${latest.timezone})` : '';
+  return `${latest.date}${tz}: ${parts.join(' · ')}`;
 }
 
 /** Label for a provider row. Null means the backend did not report this provider. */

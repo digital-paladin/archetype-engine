@@ -219,11 +219,14 @@ router.get('/sleep-history', async (req: Request, res: Response) => {
       for (const night of nights) {
         if (!(night.hours > 0)) continue;
         try {
-          await db.upsertJournalEntry(userId, {
+          const patch: { entry_date: string; sleep_hours: number; fitbit_score?: number } = {
             entry_date: night.date,
             sleep_hours: night.hours,
-            fitbit_score: night.score,
-          });
+          };
+          // A missing wearable score is 0 on the shared sleep payload. Do not
+          // store that sentinel as the consolidation score.
+          if (night.score > 0) patch.fitbit_score = night.score;
+          await db.upsertJournalEntry(userId, patch);
         } catch (persistErr) {
           console.warn(`[DAILY] sleep persist ${night.date} failed: ${persistErr instanceof Error ? persistErr.message : persistErr}`);
         }

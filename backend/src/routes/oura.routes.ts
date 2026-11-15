@@ -1,106 +1,171 @@
 import { Router, Request, Response } from 'express';
 import { getDataService } from '../services/data/dataService';
+import { OuraError } from '../services/ouraErrors';
+import { escapeHtml, safeFrontendUrl, signOuraState, verifyOuraState } from '../services/ouraOAuthState';
+import { ouraTokenKeyConfigured } from '../services/ouraTokenCrypto';
 import { OuraService } from '../services/oura.service';
 import { authMiddleware } from '../middleware/auth.middleware';
 import { requireTier } from '../middleware/requireTier.middleware';
-import { syncSleepDebtFromJournalSafe } from '../services/sleepDebt.service';
+import { chicagoDay } from '../services/activityOccurredAt';
+import { isRealIsoDate } from '../services/recoveryQuests.service';
 
 const router = Router();
 const ouraService = new OuraService();
 
+function userIdOf(req: Request): string {
+  return (req as Request & { userId: string }).userId;
+}
+
+function requestedDate(value: unknown): string | null {
+  if (value === undefined) return chicagoDay(new Date());
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return chicagoDay(new Date());
+  return isRealIsoDate(trimmed) ? trimmed : null;
+}
+
+function sendOuraError(res: Response, err: unknown) {
+  if (err instanceof OuraError) {
+    console.error(`[OURA] ${err.code}`);
+    return res.status(err.httpStatus).json({
+      success: false,
+      error: err.safeMessage,
+      code: err.code,
+      requiresAuth: err.code === 'revoked' || err.code === 'not_connected',
+    });
+  }
+  console.error(`[OURA] failed: ${err instanceof Error ? err.name : 'error'}`);
+  return res.status(500).json({ success: false, error: 'Oura request failed.' });
+}
+
+function page(title: string, bodyHtml: string): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title></head>
+<body style="font-family:sans-serif;padding:2rem;background:#1a1a2e;color:#e0d5f5">
+<h1>${escapeHtml(title)}</h1>${bodyHtml}</body></html>`;
+}
+
 /**
- * GET /api/oura/connect-url — PROTECTED (Paladin+)
- * Returns OAuth authorize URL with state=userId for SPA redirect.
+ * GET /api/oura/connect-url — signed OAuth state for the signed-in user.
+ * The state is not the user id, and it is not accepted from the browser.
  */
 router.get('/connect-url', authMiddleware, requireTier('paladin'), (req: Request, res: Response) => {
   try {
     if (!ouraService.isConfigured()) {
       return res.status(503).json({
         success: false,
-        error: 'Oura not configured. Set OURA_CLIENT_ID and OURA_CLIENT_SECRET.',
+        error: 'Oura is not configured. Set OURA_CLIENT_ID, OURA_CLIENT_SECRET, and OURA_REDIRECT_URI.',
       });
     }
-    const userId = (req as any).userId as string;
-    const url = ouraService.getAuthUrl(userId);
-    return res.json({ success: true, url });
+    if (!ouraTokenKeyConfigured()) {
+      return res.status(503).json({
+        success: false,
+        error: 'Set INTEGRATIONS_ENCRYPTION_KEY before connecting Oura.',
+      });
+    }
+    const state = signOuraState(userIdOf(req));
+    return res.json({ success: true, url: ouraService.getAuthUrl(state) });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Auth setup failed';
-    return res.status(500).json({ success: false, error: msg });
+    return sendOuraError(res, err);
   }
 });
 
 /**
- * GET /api/oura/callback — UNPROTECTED OAuth redirect from Oura.
- * state must be the connecting user's UUID (from connect-url).
+ * GET /api/oura/callback — Oura redirects here. State must be a signed, unspent value
+ * from connect-url. A missing or raw user id is rejected, including OWNER_USER_ID.
  */
 router.get('/callback', async (req: Request, res: Response) => {
-  const { code, error, state } = req.query;
-
+  const error = typeof req.query.error === 'string' ? req.query.error.slice(0, 120) : '';
   if (error) {
-    return res.status(400).send(`<h1>❌ Oura Auth Denied</h1><p>${error}</p>`);
+    return res.status(400).type('html').send(page(
+      'Oura authorization was denied',
+      `<p>${escapeHtml(error)}</p>`,
+    ));
   }
-  if (!code || typeof code !== 'string') {
-    return res.status(400).send('<h1>❌ No authorization code received</h1>');
+  const code = typeof req.query.code === 'string' ? req.query.code : '';
+  const state = typeof req.query.state === 'string' ? req.query.state : '';
+  if (!code || !state) {
+    return res.status(400).type('html').send(page(
+      'Oura authorization did not include a code and state',
+      '<p>Start the connection again from the app.</p>',
+    ));
   }
-  const userId = typeof state === 'string' && state.length > 0
-    ? state
-    : (process.env.OWNER_USER_ID || '');
-  if (!userId) {
-    return res.status(400).send('<h1>❌ Missing OAuth state (user id)</h1>');
+  let userId: string;
+  try {
+    userId = verifyOuraState(state).userId;
+  } catch {
+    return res.status(400).type('html').send(page(
+      'Oura authorization state was invalid or expired',
+      '<p>Start the connection again from the app.</p>',
+    ));
   }
-
   try {
     await ouraService.exchangeCode(code, userId);
-    const frontend = (process.env.FRONTEND_URL || process.env.CORS_ORIGIN?.split(',')[0] || '/')
-      .replace(/\/$/, '');
-    res.send(`
-      <h1>✅ Oura Connected!</h1>
-      <p>Sleep and readiness will sync to your journal.</p>
-      <p><a href="${frontend}">Return to dashboard</a></p>
-      <style>body { font-family: sans-serif; padding: 2rem; background: #1a1a2e; color: #e0d5f5; }
-      a { color: #c9a84c; }</style>
-    `);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Unknown error';
-    console.error(`[OURA] Code exchange failed: ${msg}`);
-    res.status(500).send(`<h1>❌ Auth Failed</h1><p>${msg}</p>`);
+    const msg = err instanceof OuraError ? err.safeMessage : 'Oura authorization failed.';
+    console.error(`[OURA] code exchange failed: ${err instanceof OuraError ? err.code : 'error'}`);
+    return res.status(400).type('html').send(page(
+      'Oura authorization failed',
+      `<p>${escapeHtml(msg)}</p>`,
+    ));
   }
+  const frontend = safeFrontendUrl();
+  return res.type('html').send(page(
+    'Oura connected',
+    `<p>Sleep, readiness, and activity summaries can sync when Oura has them. A ring that is not paired yet stays empty.</p>
+     <p><a href="${escapeHtml(frontend)}" style="color:#c9a84c">Return to the app</a></p>`,
+  ));
 });
 
 router.get('/status', authMiddleware, requireTier('paladin'), async (req: Request, res: Response) => {
-  const userId = (req as any).userId as string;
-  const connected = await ouraService.hasTokens(userId);
-  res.json({
-    success: true,
-    provider: 'oura',
-    configured: ouraService.isConfigured(),
-    connected,
-  });
+  try {
+    const status = await ouraService.connectionStatus(userIdOf(req));
+    return res.json({ success: true, provider: 'oura', ...status });
+  } catch (err) {
+    return sendOuraError(res, err);
+  }
+});
+
+router.post('/sync', authMiddleware, requireTier('paladin'), async (req: Request, res: Response) => {
+  const raw = typeof req.body?.date === 'string' ? req.body.date : undefined;
+  const dateStr = requestedDate(raw);
+  if (!dateStr) {
+    return res.status(400).json({ success: false, error: 'date must be YYYY-MM-DD' });
+  }
+  try {
+    const result = await ouraService.syncDay(userIdOf(req), dateStr);
+    return res.json({ success: true, provider: 'oura', ...result });
+  } catch (err) {
+    return sendOuraError(res, err);
+  }
+});
+
+router.delete('/connection', authMiddleware, requireTier('paladin'), async (req: Request, res: Response) => {
+  try {
+    await ouraService.disconnect(userIdOf(req));
+    return res.json({ success: true, provider: 'oura', connected: false });
+  } catch (err) {
+    return sendOuraError(res, err);
+  }
 });
 
 router.get('/sleep/today', authMiddleware, requireTier('paladin'), async (req: Request, res: Response) => {
   if (!ouraService.isConfigured()) {
     return res.status(503).json({
       success: false,
-      error: 'Oura not configured. Set OURA_CLIENT_ID and OURA_CLIENT_SECRET.',
+      error: 'Oura is not configured. Set OURA_CLIENT_ID, OURA_CLIENT_SECRET, and OURA_REDIRECT_URI.',
     });
   }
-
-  const clientDate = typeof req.query.date === 'string' ? req.query.date : undefined;
-  const userId = (req as any).userId as string;
-  const dateStr = clientDate ?? new Date().toLocaleDateString('en-CA');
-
+  const dateStr = requestedDate(typeof req.query.date === 'string' ? req.query.date : undefined);
+  if (!dateStr) return res.status(400).json({ success: false, error: 'date must be YYYY-MM-DD' });
+  const userId = userIdOf(req);
   try {
-    const db = getDataService();
-    const entry = await db.getJournalEntry(userId, dateStr);
-    // Cache on sleep_hours, not fitbit_score — a manual edit (e.g. adding nap
-    // time the wearable didn't capture) only sets sleep_hours, and must not
-    // get silently overwritten by a later same-day auto-sync call.
+    const entry = await getDataService().getJournalEntry(userId, dateStr);
     if (entry?.sleep_hours && entry.sleep_hours > 0) {
       return res.json({
         success: true,
         source: 'cache',
         provider: 'oura',
+        xpAwarded: 0,
         sleep: {
           score: entry.fitbit_score ?? 0,
           hours: entry.sleep_hours ?? 0,
@@ -111,29 +176,18 @@ router.get('/sleep/today', authMiddleware, requireTier('paladin'), async (req: R
         },
       });
     }
-
     const sleep = await ouraService.getSleepData(dateStr, userId);
-    if (sleep.score > 0) {
-      await db.upsertJournalEntry(userId, {
-        user_id: userId,
-        entry_date: dateStr,
-        fitbit_score: sleep.score,
-        sleep_hours: sleep.hours,
-        sleep_start: sleep.startTime,
-        sleep_end: sleep.endTime,
-      });
-      await syncSleepDebtFromJournalSafe(userId);
-    }
-    return res.json({ success: true, source: 'oura', provider: 'oura', sleep });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Unknown error';
-    console.error(`[OURA] sleep/today failed: ${msg}`);
-    const needsAuth = /not connected|refresh failed|401/i.test(msg);
-    return res.status(needsAuth ? 401 : 500).json({
-      success: false,
-      error: msg,
-      requiresAuth: needsAuth,
+    const journalUpdated = await ouraService.writeJournalSleepIfEmpty(userId, dateStr, sleep);
+    return res.json({
+      success: true,
+      source: 'oura',
+      provider: 'oura',
+      journalUpdated,
+      xpAwarded: 0,
+      sleep,
     });
+  } catch (err) {
+    return sendOuraError(res, err);
   }
 });
 
@@ -141,21 +195,22 @@ router.get('/readiness/today', authMiddleware, requireTier('paladin'), async (re
   if (!ouraService.isConfigured()) {
     return res.status(503).json({
       success: false,
-      error: 'Oura not configured. Set OURA_CLIENT_ID and OURA_CLIENT_SECRET.',
+      error: 'Oura is not configured. Set OURA_CLIENT_ID, OURA_CLIENT_SECRET, and OURA_REDIRECT_URI.',
     });
   }
-
-  const clientDate = typeof req.query.date === 'string' ? req.query.date : undefined;
-  const userId = (req as any).userId as string;
-  const dateStr = clientDate ?? new Date().toLocaleDateString('en-CA');
-
+  const dateStr = requestedDate(typeof req.query.date === 'string' ? req.query.date : undefined);
+  if (!dateStr) return res.status(400).json({ success: false, error: 'date must be YYYY-MM-DD' });
   try {
-    const readiness = await ouraService.getReadiness(dateStr, userId);
-    return res.json({ success: true, provider: 'oura', readiness });
+    const readiness = await ouraService.getReadiness(dateStr, userIdOf(req));
+    return res.json({
+      success: true,
+      provider: 'oura',
+      xpAwarded: 0,
+      note: 'Oura readiness is informational. It does not award XP, create a workout, or give medical advice.',
+      readiness,
+    });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Unknown error';
-    console.error(`[OURA] readiness/today failed: ${msg}`);
-    return res.status(500).json({ success: false, error: msg });
+    return sendOuraError(res, err);
   }
 });
 

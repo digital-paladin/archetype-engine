@@ -13,9 +13,12 @@ export interface WearableSleepData {
 }
 
 export interface WearableReadinessData {
-  score: number;           // 0–100
+  score: number;           // 0–100, Oura's readiness score
   temperatureDeviation?: number;
+  /** Oura contributor score 0–100, not HRV in milliseconds. */
   hrvBalance?: number;
+  /** Same contributor as hrvBalance, named so callers do not treat it as ms. */
+  hrvBalanceContributor?: number;
   date: string;            // YYYY-MM-DD
 }
 

@@ -268,6 +268,7 @@ export interface IDataService {
   // ── Wearable tokens (Oura / Garmin / …) ────────────────────────────────
   getWearableTokens(userId: string, provider: string): Promise<WearableTokenRow | null>;
   saveWearableTokens(userId: string, provider: string, tokens: WearableTokenRow): Promise<void>;
+  deleteWearableTokens(userId: string, provider: string): Promise<void>;
 
   // ── Treasury ───────────────────────────────────────────────────────────
   getSpendingEntries(userId: string, month?: string): Promise<SpendingEntry[]>;
