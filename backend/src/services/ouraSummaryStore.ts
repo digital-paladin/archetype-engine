@@ -46,7 +46,7 @@ export function mapOuraStorageError(error: { message?: string; code?: string }):
     || (namesTable && /does not exist|schema cache|could not find/i.test(message));
   if (missing) {
     return new OuraError(
-      'Oura summary storage is not ready. Apply supabase/migrations/015_oura_daily_summaries.sql.',
+      'Oura summary storage is not ready. Apply supabase/migrations/016_oura_daily_summaries.sql.',
       503,
       'storage',
     );

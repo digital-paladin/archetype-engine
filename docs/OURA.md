@@ -48,7 +48,7 @@ Rows are upserted on `(user_id, summary_date)`. Disconnect deletes that user's O
 6. Apply the summary table before the first sync. Railway does not run SQL on deploy:
 
    ```bash
-   node backend/scripts/apply-migration.js supabase/migrations/015_oura_daily_summaries.sql
+   node backend/scripts/apply-migration.js supabase/migrations/016_oura_daily_summaries.sql
    ```
 
 7. Restart the backend. A new Oura API application can authorize about 10 users until Oura approves it.

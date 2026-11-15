@@ -5,7 +5,7 @@
 -- Railway deploys the backend from main and does not run this SQL.
 -- Apply before the first Oura sync:
 --
---   node backend/scripts/apply-migration.js supabase/migrations/015_oura_daily_summaries.sql
+--   node backend/scripts/apply-migration.js supabase/migrations/016_oura_daily_summaries.sql
 
 CREATE TABLE IF NOT EXISTS oura_daily_summaries (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),

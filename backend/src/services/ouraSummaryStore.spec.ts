@@ -89,7 +89,7 @@ describe('Oura summary store', () => {
       message: "Could not find the table 'oura_daily_summaries' token=secret-access",
     });
     expect(err).toBeInstanceOf(OuraError);
-    expect(err.safeMessage).toMatch(/015_oura_daily_summaries\.sql/);
+    expect(err.safeMessage).toMatch(/016_oura_daily_summaries\.sql/);
     expect(err.safeMessage).not.toContain('secret-access');
     expect(err.httpStatus).toBe(503);
   });
