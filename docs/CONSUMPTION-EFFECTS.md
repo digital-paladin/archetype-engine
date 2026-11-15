@@ -221,9 +221,63 @@ curl -X POST "$API/api/system/consumption" \
 
 On that Tuesday the 9:45 PM pour is 0.5 h before 22:15: Sleep Quality −10%, duration 270 minutes. The same pour on Wednesday (`2026-10-21T21:45:00-05:00`) is after 21:30, so the source says `at or after bedtime`, Sleep Quality is −11%, and the duration is 290 minutes.
 
-`201` the first time, `200` with `idempotentReplay: true` after that. `noticeBody` is also stored as a System message (`GET /api/system/messages`) and emitted as `system:notice`.
+`201` the first time, `200` with `idempotentReplay: true` after that. `noticeBody` is also stored as a System message (`GET /api/system/messages`) and emitted as `system:notice`. The body includes `id`, the food-log id of the new row.
 
-Other bodies the same endpoint accepts: `waterOz`, `caffeineMg`, `addedSugarG`, `supplements: [{ "key": "creatine", "amount": 5, "unit": "g" }]`, `protein`, `bodyWeightLb`. Keys the logger understands are `creatine`, `magnesium`, and `melatonin`.
+Other bodies the same endpoint accepts: `waterOz`, `caffeineMg`, `addedSugarG`, `totalSugarG`, `supplements: [{ "key": "creatine", "amount": 5, "unit": "g" }]`, `protein`, `bodyWeightLb`. Keys the logger understands are `creatine`, `magnesium`, and `melatonin`.
+
+`totalSugarG` is the label's total sugar, including sugar that was not added. It is stored on the food log and returned by the list and correction routes. It does not set the `added-sugar` flag and it does not apply Sugar Rush. Those still require `addedSugarG`.
+
+### Correcting an entry
+
+A posted row is replaced, not logged again. Daily protein, meal count, and water move by the difference, so a second meal, a second XP line, and a second dose are not created. The activity feed is not appended. Flags are recomputed from the name, notes, and added sugar. Dose-stack effects (sugar, alcohol, caffeine, creatine, magnesium, melatonin) drop this row's previous dose and project the stack again at the latest dose time, which keeps the window the meal would have had. Protein and hydration buffs are refreshed when the edited day is today, or when the live buff's stored total still matches that day.
+
+Replaying the same `idempotencyKey` returns the entry as it is now and does not post a second System message.
+
+No new SQL. `id`, `notes`, `editedAt`, `edits`, and `totalSugarG` live on the existing `food_log` JSON from `012_status_effects.sql`.
+
+List a day (assigns an id to any older row that does not have one):
+
+```bash
+curl "$API/api/system/consumption?date=2026-10-27" \
+  -H "Authorization: Bearer $ARCHETYPE_SYSTEM_KEY"
+```
+
+```json
+{
+  "success": true,
+  "date": "2026-10-27",
+  "entries": [{
+    "id": "6f1c0b2e-7a0d-4e5a-9c1f-2b6d8e4a1c30",
+    "itemName": "Tres Leches Slice",
+    "calories": 540,
+    "protein": 9,
+    "addedSugarG": 0,
+    "totalSugarG": null,
+    "notes": null,
+    "consumedAt": "2026-10-27T19:30:00-05:00",
+    "dietFlags": [],
+    "editedAt": null,
+    "editCount": 0
+  }]
+}
+```
+
+Correct it:
+
+```bash
+curl -X PATCH "$API/api/system/consumption/6f1c0b2e-7a0d-4e5a-9c1f-2b6d8e4a1c30" \
+  -H "Authorization: Bearer $ARCHETYPE_SYSTEM_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "idempotencyKey": "consumption-correction:tres-leches-sugar",
+    "addedSugarG": 42.5,
+    "totalSugarG": 42.5,
+    "notes": "Label sugar for the portion eaten",
+    "reason": "Label was read after the meal was logged"
+  }'
+```
+
+`200` body includes `changes` (`addedSugarG: 0 → 42.5`), `previous`, `dietFlags: ["added-sugar"]`, and a Sugar Rush effect projected from the meal's own timestamp. `noticeBody` is also stored as a System message. The same call with a player session is `PATCH /api/consume/:id` (idempotency key optional, no System message). `GET /api/consume?date=YYYY-MM-DD` lists that player's day. An unknown id is `404`. A missing or non-system credential is `401` or `403`.
 
 `GET /api/status-effects` is unchanged in shape. Auto rows add `dose`, `autoApplied`, `effectKey`, and `source`. The Status Effects panel shows the source, the dose, and an auto tag.
 

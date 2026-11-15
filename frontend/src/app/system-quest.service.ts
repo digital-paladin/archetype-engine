@@ -10,11 +10,22 @@ export interface SystemObjective {
   target: number;
   progress: number;
   done: boolean;
+  /** Flat class XP paid once when this milestone completes. Not derived from money. */
+  xpReward?: Record<string, number>;
+  xpAwardedAt?: string | null;
+}
+
+export interface LinkedInventoryItem {
+  id: string;
+  slug: string;
+  name: string;
+  category: string;
+  stockStatus: 'stocked' | 'low' | 'needed' | null;
 }
 
 export interface SystemQuest {
   id: string;
-  kind: 'daily' | 'emergency' | 'hidden' | 'penalty' | string;
+  kind: 'daily' | 'emergency' | 'hidden' | 'penalty' | 'acquisition' | string;
   status: 'active' | 'cleared' | 'failed' | 'expired' | string;
   hidden: boolean;
   revealed: boolean;
@@ -32,6 +43,12 @@ export interface SystemQuest {
   training: boolean;
   thursdayTrainingFlag: boolean;
   recoveryType: string | null;
+  /** USD cents. Acquisition bookkeeping. Never XP. */
+  targetCostCents?: number | null;
+  amountSavedCents?: number;
+  inventoryItemId?: string | null;
+  budgetGrantsXp?: false;
+  linkedItem?: LinkedInventoryItem | null;
   resolution: { outcome: string; xpPlanned?: { className: string; xp: number }[] } | null;
   resolvedAt: string | null;
   editedAt?: string | null;

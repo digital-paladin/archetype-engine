@@ -42,6 +42,10 @@ describe('toBackendActivityType', () => {
     expect(toBackendActivityType('prayer')).toBe('prayer-routine');
     expect(toBackendActivityType('prayer-routine')).toBe('prayer-routine');
     expect(toBackendActivityType('daily-log')).toBe('admin-planning');
+
+    // Meetings are not Developer deep work unless the log carries a TTI work tag.
+    expect(toBackendActivityType('meetings-active')).toBe('meeting-active');
+    expect(toBackendActivityType('meetings-passive')).toBe('meeting-passive');
   });
 
   it('does not send hydration or free text, which the server would file as Sage', () => {

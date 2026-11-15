@@ -20,12 +20,20 @@ export interface BodyPartBoneAnchor {
 
 /**
  * Maps every BodyPart zone to a real skeleton bone (or bone pair) so the
- * character panel can point a marker at it in 3D space, instead of only the
- * flat 2D SVG diagram. back-upper/back-lower have no dedicated spine-facing
- * bone in the standard Mixamo rig, so they approximate off the nearest spine
- * bone — comparable precision to the flat diagram, which is itself only an
- * approximate zone map.
+ * character panel can place a marker and accept a tap on that region.
+ * back-upper/back-lower have no dedicated spine-facing bone in the standard
+ * Mixamo rig, so they share the nearest spine bone with chest/abdomen and are
+ * disambiguated by which side of the character the camera is on.
  */
+const BACK_BODY_PARTS = new Set<BodyPart>(['back-upper', 'back-lower']);
+/** World-space distance under which two anchors (chest vs upper back) count as the same hit. */
+const ANCHOR_TIE_EPSILON = 0.08;
+/** NDC radius for the thin-geometry fallback when a click misses the mesh (feet, hands). */
+const SCREEN_PICK_MAX_NDC = 0.14;
+const ORBIT_RADIUS_MIN = 1.6;
+const ORBIT_RADIUS_MAX = 7.5;
+const ORBIT_POLAR_MIN = 0.35;
+const ORBIT_POLAR_MAX = 1.75;
 export const BODY_PART_BONE_MAP: Record<BodyPart, BodyPartBoneAnchor> = {
   head:             { bone: 'Head',        anchor: 'joint' },
   neck:             { bone: 'Neck',        anchor: 'joint' },
@@ -69,6 +77,13 @@ export class ThreeCharacterService {
   private clock = new THREE.Clock();
   private animationFrameId: number | null = null;
   private frameCallbacks: Array<() => void> = [];
+  /** Full-body orbit target. The model is normalized to ~1.8 units, feet near y=0. */
+  private orbitTarget = new THREE.Vector3(0, 0.9, 0);
+  private orbitRadius = 3.8;
+  private orbitAzimuth = 0;
+  private orbitPolar = Math.PI / 2;
+  private readonly raycaster = new THREE.Raycaster();
+  private readonly ndcPointer = new THREE.Vector2();
 
   constructor() {}
 
@@ -93,15 +108,14 @@ export class ThreeCharacterService {
     const width  = canvas.clientWidth  || 240;
     const height = canvas.clientHeight || 400;
 
-    // Camera (upper-body shot, slightly angled)
+    // Full-body framing so feet and other extremities stay on screen and tappable.
     this.camera = new THREE.PerspectiveCamera(
       45,
       width / height,
       0.1,
       1000
     );
-    this.camera.position.set(0, 1.5, 3); // Eye level, slight distance
-    this.camera.lookAt(0, 1.2, 0); // Focus on upper chest/head
+    this.resetView();
 
     // Renderer
     this.renderer = new THREE.WebGLRenderer({ 
@@ -644,12 +658,14 @@ export class ThreeCharacterService {
 
   private cameraOrbit(duration: number): void {
     const startPosition = this.camera.position.clone();
+    const startQuaternion = this.camera.quaternion.clone();
     const startTime = Date.now();
 
     const orbit = () => {
       const elapsed = Date.now() - startTime;
       if (elapsed >= duration) {
         this.camera.position.copy(startPosition);
+        this.camera.quaternion.copy(startQuaternion);
         return;
       }
 
@@ -658,7 +674,7 @@ export class ThreeCharacterService {
       const radius = 3;
       this.camera.position.x = Math.sin(angle) * radius;
       this.camera.position.z = Math.cos(angle) * radius;
-      this.camera.lookAt(0, 1.2, 0);
+      this.camera.lookAt(this.orbitTarget);
 
       requestAnimationFrame(orbit);
     };
@@ -696,14 +712,12 @@ export class ThreeCharacterService {
   }
 
   /**
-   * Projects a bone's (or the midpoint between two bones') current world position
-   * through the active camera into 0-100% screen-space coordinates, matching the
-   * [style.left.%]/[style.top.%] convention already used for "Floating XP Text".
-   * Returns null if the bone can't be resolved or falls outside the camera's view.
+   * World position of a bone, or the midpoint between two bones. Returns null
+   * when the primary bone cannot be resolved.
    */
-  getBoneScreenPosition(boneName: string, secondaryBoneName?: string): { xPct: number; yPct: number } | null {
+  getBoneWorldPosition(boneName: string, secondaryBoneName?: string): THREE.Vector3 | null {
     const bone = this.resolveBone(boneName);
-    if (!bone || !this.camera) return null;
+    if (!bone) return null;
 
     const pos = new THREE.Vector3();
     bone.getWorldPosition(pos);
@@ -716,6 +730,20 @@ export class ThreeCharacterService {
         pos.lerp(pos2, 0.5);
       }
     }
+
+    return pos;
+  }
+
+  /**
+   * Projects a bone's (or the midpoint between two bones') current world position
+   * through the active camera into 0-100% screen-space coordinates, matching the
+   * [style.left.%]/[style.top.%] convention already used for "Floating XP Text".
+   * Returns null if the bone can't be resolved or falls outside the camera's view.
+   */
+  getBoneScreenPosition(boneName: string, secondaryBoneName?: string): { xPct: number; yPct: number } | null {
+    if (!this.camera) return null;
+    const pos = this.getBoneWorldPosition(boneName, secondaryBoneName);
+    if (!pos) return null;
 
     const ndc = pos.clone().project(this.camera);
     if (ndc.z > 1 || ndc.z < -1) return null; // outside near/far camera range
@@ -731,6 +759,123 @@ export class ThreeCharacterService {
     const mapping = BODY_PART_BONE_MAP[bodyPart];
     if (!mapping) return null;
     return this.getBoneScreenPosition(mapping.bone, mapping.secondaryBone);
+  }
+
+  getBodyPartAnchorWorldPosition(bodyPart: BodyPart): THREE.Vector3 | null {
+    const mapping = BODY_PART_BONE_MAP[bodyPart];
+    if (!mapping) return null;
+    return this.getBoneWorldPosition(mapping.bone, mapping.secondaryBone);
+  }
+
+  /**
+   * Restores the default full-body front view. Feet (y ≈ 0) and the head
+   * (y ≈ 1.8) both land inside a 45° frame instead of the old chest-height shot.
+   */
+  resetView(): void {
+    if (!this.camera) return;
+    // Aimed a little low and pulled back so feet sit around 70% of the frame
+    // and hands stay inside a narrow sidebar, instead of an upper-body shot.
+    this.orbitTarget.set(0, 0.7, 0);
+    this.camera.position.set(0, 0.78, 4.4);
+    this.camera.lookAt(this.orbitTarget);
+    this.syncOrbitFromCamera();
+  }
+
+  /** Drag-to-orbit. Angles are radians; polar is clamped so the camera stays above the floor. */
+  orbitBy(deltaAzimuth: number, deltaPolar: number): void {
+    if (!this.camera) return;
+    this.orbitAzimuth += deltaAzimuth;
+    this.orbitPolar = THREE.MathUtils.clamp(this.orbitPolar + deltaPolar, ORBIT_POLAR_MIN, ORBIT_POLAR_MAX);
+    this.applyOrbit();
+  }
+
+  /** Scroll / button zoom. Positive delta pulls the camera back. */
+  dolly(deltaRadius: number): void {
+    if (!this.camera) return;
+    this.orbitRadius = THREE.MathUtils.clamp(this.orbitRadius + deltaRadius, ORBIT_RADIUS_MIN, ORBIT_RADIUS_MAX);
+    this.applyOrbit();
+  }
+
+  /**
+   * Picks the body region under an NDC click (-1..1, +y up).
+   * A mesh hit uses the nearest bone anchor in world space. A miss (thin feet
+   * or hands) falls back to the nearest on-screen anchor within a small radius.
+   * Chest/back share a spine bone, so the camera side breaks that tie.
+   */
+  pickBodyPartFromNdc(ndcX: number, ndcY: number): BodyPart | null {
+    if (!this.camera || !this.character) return null;
+
+    this.ndcPointer.set(ndcX, ndcY);
+    this.raycaster.setFromCamera(this.ndcPointer, this.camera);
+    const hits = this.raycaster.intersectObject(this.character, true);
+    if (hits.length > 0) {
+      return this.pickNearestBodyPart(hits[0].point);
+    }
+    return this.pickBodyPartNearNdc(ndcX, ndcY);
+  }
+
+  pickNearestBodyPart(worldPoint: THREE.Vector3): BodyPart | null {
+    const ranked: { part: BodyPart; dist: number }[] = [];
+    for (const part of Object.keys(BODY_PART_BONE_MAP) as BodyPart[]) {
+      const anchor = this.getBodyPartAnchorWorldPosition(part);
+      if (!anchor) continue;
+      ranked.push({ part, dist: anchor.distanceTo(worldPoint) });
+    }
+    if (ranked.length === 0) return null;
+    ranked.sort((a, b) => a.dist - b.dist);
+    const best = ranked[0].dist;
+    const tied = ranked.filter(entry => entry.dist <= best + ANCHOR_TIE_EPSILON);
+    return this.preferFacing(tied);
+  }
+
+  private pickBodyPartNearNdc(ndcX: number, ndcY: number): BodyPart | null {
+    const ranked: { part: BodyPart; dist: number }[] = [];
+    for (const part of Object.keys(BODY_PART_BONE_MAP) as BodyPart[]) {
+      const anchor = this.getBodyPartAnchorWorldPosition(part);
+      if (!anchor) continue;
+      const ndc = anchor.clone().project(this.camera);
+      if (ndc.z > 1 || ndc.z < -1) continue;
+      const dist = Math.hypot(ndc.x - ndcX, ndc.y - ndcY);
+      if (dist <= SCREEN_PICK_MAX_NDC) ranked.push({ part, dist });
+    }
+    if (ranked.length === 0) return null;
+    ranked.sort((a, b) => a.dist - b.dist);
+    const best = ranked[0].dist;
+    const tied = ranked.filter(entry => entry.dist <= best + 0.01);
+    return this.preferFacing(tied);
+  }
+
+  /** Mixamo characters face +Z, so a camera on the -Z side is looking at their back. */
+  private isCameraBehindCharacter(): boolean {
+    if (!this.camera || !this.character) return false;
+    const root = new THREE.Vector3();
+    this.character.getWorldPosition(root);
+    return this.camera.position.z < root.z;
+  }
+
+  private preferFacing(candidates: { part: BodyPart; dist: number }[]): BodyPart {
+    const behind = this.isCameraBehindCharacter();
+    const facing = candidates.filter(candidate => BACK_BODY_PARTS.has(candidate.part) === behind);
+    const pool = facing.length > 0 ? facing : candidates;
+    pool.sort((a, b) => a.dist - b.dist);
+    return pool[0].part;
+  }
+
+  private syncOrbitFromCamera(): void {
+    const offset = new THREE.Vector3().subVectors(this.camera.position, this.orbitTarget);
+    this.orbitRadius = Math.max(offset.length(), 0.001);
+    this.orbitPolar = Math.acos(THREE.MathUtils.clamp(offset.y / this.orbitRadius, -1, 1));
+    this.orbitAzimuth = Math.atan2(offset.x, offset.z);
+  }
+
+  private applyOrbit(): void {
+    const sinPolar = Math.sin(this.orbitPolar);
+    this.camera.position.set(
+      this.orbitTarget.x + this.orbitRadius * sinPolar * Math.sin(this.orbitAzimuth),
+      this.orbitTarget.y + this.orbitRadius * Math.cos(this.orbitPolar),
+      this.orbitTarget.z + this.orbitRadius * sinPolar * Math.cos(this.orbitAzimuth),
+    );
+    this.camera.lookAt(this.orbitTarget);
   }
 
   onWindowResize(width: number, height: number): void {

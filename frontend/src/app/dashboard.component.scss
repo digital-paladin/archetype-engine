@@ -163,6 +163,8 @@
   gap: 16px;
   position: sticky;
   top: 18px;
+  max-height: calc(100vh - 86px);
+  overflow-y: auto;
   min-width: 0; /* prevent grid item from expanding beyond 1fr track */
 }
 
@@ -451,7 +453,7 @@
 @media (max-width: 940px) {
   .eso-top-bar     { grid-template-columns: auto auto auto; height: auto; padding: 8px 12px; }
   .eso-main-layout { grid-template-columns: 1fr; padding: 12px 14px; }
-  .eso-left-column { position: static; }
+  .eso-left-column { position: static; max-height: none; overflow: visible; }
 }
 
 /* ── Mobile (Samsung S23 ≈ 393 px) ─────────────────────────────────── */
@@ -532,7 +534,7 @@
 
   /* Main layout: full-width single column, tighter padding */
   .eso-main-layout { grid-template-columns: 1fr; padding: 10px 10px 24px; gap: 12px; }
-  .eso-left-column { position: static; }
+  .eso-left-column { position: static; max-height: none; overflow: visible; }
 
   /* Panels: tighten padding so content breathes on narrow screen */
   .eso-panel { padding: 10px 12px; }

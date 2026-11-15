@@ -1,5 +1,15 @@
-export interface InventoryItem {
+export interface InventoryQuestLink {
   id: string;
+  title: string;
+  status: string;
+  kind: string;
+}
+
+export interface InventoryItem {
+  /** Stable slug. Equip toggles still send this id. */
+  id: string;
+  /** Database uuid. Acquisition quests store this as inventoryItemId. */
+  rowId?: string;
   name: string;
   type: 'consumable' | 'equipment';
   category: 'steel-supplement' | 'recovery-gear' | 'armor' | 'weapon' | 'mount' | 'tech-hardware' | 'survivalist';
@@ -7,10 +17,12 @@ export interface InventoryItem {
   unit: string;
   description: string;
   equipped?: boolean;          // For armor only
-  level?: number;              // Level requirement for armor
-  stockStatus?: 'stocked' | 'low' | 'needed';  // For supplies
-  monthlyCost?: string;        // e.g. '$50-60'
-  priority?: 'HIGH' | 'MEDIUM' | 'LOW';
+  level?: number | null;       // Level requirement for armor
+  stockStatus?: 'stocked' | 'low' | 'needed' | null;  // For supplies
+  monthlyCost?: string | null;        // Display label only. Not XP.
+  priority?: 'HIGH' | 'MEDIUM' | 'LOW' | null;
+  acquisitionQuestId?: string | null;
+  acquisitionQuest?: InventoryQuestLink | null;
 }
 
 export interface BudgetPhase {

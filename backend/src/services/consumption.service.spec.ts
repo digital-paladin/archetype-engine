@@ -1,7 +1,7 @@
 import { JournalEntry } from './data/IDataService';
-import { logConsumption } from './consumption.service';
+import { correctConsumption, listConsumption, logConsumption } from './consumption.service';
 import { getAllEffects } from './statusEffects.service';
-import { MemoryStatusEffectStore, setStatusEffectStore } from './statusEffect.store';
+import { getStatusEffectStore, MemoryStatusEffectStore, setStatusEffectStore } from './statusEffect.store';
 import { MemorySystemQuestStore, setSystemQuestStore } from './systemQuest.store';
 import { postSystemMessage } from './systemQuest.service';
 import * as abstinence from './abstinence.service';
@@ -21,6 +21,21 @@ function journalFake() {
       const key = `${userId}:${entry.entry_date}`;
       const prev = rows.get(key);
       rows.set(key, { ...(prev ?? { user_id: userId, entry_date: entry.entry_date! }), ...entry, user_id: userId });
+    },
+    async listJournalFoodDays(userId: string) {
+      const days = [];
+      for (const [key, row] of rows) {
+        if (!key.startsWith(`${userId}:`) || !Array.isArray(row.food_log)) continue;
+        days.push({
+          entry_date: row.entry_date,
+          food_log: row.food_log,
+          protein_grams_logged: row.protein_grams_logged,
+          meal_count: row.meal_count,
+          hydration_oz: row.hydration_oz,
+          sleep_start: row.sleep_start,
+        });
+      }
+      return days;
     },
   };
 }
@@ -189,5 +204,241 @@ describe('logConsumption', () => {
       clientDate: '2026-10-20',
     }, { journal });
     expect(logged.effects.find(e => e.effectKey === 'alcohol')?.source).toContain('3.5h before bedtime');
+  });
+});
+
+describe('correctConsumption', () => {
+  const userId = 'player-1';
+  let journal: ReturnType<typeof journalFake>;
+  const at = '2026-10-27T19:30:00-05:00';
+
+  beforeEach(() => {
+    setStatusEffectStore(new MemoryStatusEffectStore());
+    setSystemQuestStore(new MemorySystemQuestStore());
+    journal = journalFake();
+  });
+
+  function sugarGrams(effect: { meta?: Record<string, unknown> } | undefined): number {
+    const doses = effect?.meta && Array.isArray(effect.meta.doses)
+      ? effect.meta.doses as Array<{ grams?: number; entryId?: string }>
+      : [];
+    return doses.reduce((sum, dose) => sum + (dose.grams ?? 0), 0);
+  }
+
+  it('sets added sugar on an existing row, flags it, and does not double-count the meal', async () => {
+    const slice = await logConsumption(userId, {
+      idempotencyKey: 'tres-leches',
+      itemName: 'Tres Leches Slice',
+      calories: 540,
+      protein: 9,
+      consumedAt: at,
+      clientDate: '2026-10-27',
+    }, { journal, notifySystem: true, authKind: 'service' });
+    const side = await logConsumption(userId, {
+      idempotencyKey: 'side-salad',
+      itemName: 'Side Salad',
+      calories: 120,
+      protein: 4,
+      consumedAt: '2026-10-27T19:40:00-05:00',
+      clientDate: '2026-10-27',
+    }, { journal });
+    expect(slice.effects.find(effect => effect.effectKey === 'sugar')).toBeUndefined();
+    expect(side.mealCount).toBe(2);
+    expect(side.proteinGrams).toBe(13);
+
+    const corrected = await correctConsumption(userId, slice.id, {
+      idempotencyKey: 'tres-leches-sugar',
+      addedSugarG: 42.5,
+      notes: 'Label sugar for the portion eaten',
+      reason: 'Label was read after the meal was logged',
+    }, { journal, notifySystem: true, authKind: 'service', now: new Date(at) });
+
+    expect(corrected.idempotentReplay).toBe(false);
+    expect(corrected.dietFlags).toEqual(['added-sugar']);
+    expect(corrected.previous).toEqual({ addedSugarG: 0, notes: null });
+    expect(corrected.changes).toEqual([
+      'notes: (empty) → Label sugar for the portion eaten',
+      'addedSugarG: 0 → 42.5',
+    ]);
+    expect(corrected.mealCount).toBe(2);
+    expect(corrected.proteinGrams).toBe(13);
+    const rush = corrected.effects.find(effect => effect.effectKey === 'sugar');
+    expect(rush?.name).toBe('Sugar Rush');
+    expect(rush?.dose).toBe('42.5 g added sugar');
+    expect(sugarGrams(rush)).toBe(42.5);
+    expect(corrected.noticeBody).toContain('Sugar Rush');
+    expect(corrected.noticeBody).toContain('added-sugar');
+
+    const saved = journal.rows.get(`${userId}:2026-10-27`);
+    expect(saved?.food_log).toHaveLength(2);
+    expect(saved?.meal_count).toBe(2);
+    const messages = await (await import('./systemQuest.store')).getSystemQuestStore().listMessages(userId, 10);
+    expect(messages).toHaveLength(2);
+
+    const replay = await correctConsumption(userId, slice.id, {
+      idempotencyKey: 'tres-leches-sugar',
+      addedSugarG: 80,
+    }, { journal, notifySystem: true, authKind: 'service', now: new Date(at) });
+    expect(replay.idempotentReplay).toBe(true);
+    expect(replay.entry.addedSugarG).toBe(42.5);
+    const still = await getAllEffects(userId, new Date(at));
+    expect(sugarGrams(still.find(effect => effect.effectKey === 'sugar'))).toBe(42.5);
+    const afterReplay = await (await import('./systemQuest.store')).getSystemQuestStore().listMessages(userId, 10);
+    expect(afterReplay).toHaveLength(2);
+  });
+
+  it('replaces a sugar dose instead of stacking, and clears Sugar Rush at zero', async () => {
+    const logged = await logConsumption(userId, {
+      itemName: 'Tres Leches Slice',
+      calories: 540,
+      addedSugarG: 42.5,
+      consumedAt: at,
+      clientDate: '2026-10-27',
+    }, { journal });
+    const lowered = await correctConsumption(userId, logged.id, {
+      addedSugarG: 10,
+    }, { journal, now: new Date(at) });
+    expect(sugarGrams(lowered.effects.find(effect => effect.effectKey === 'sugar'))).toBe(10);
+    expect(lowered.mealCount).toBe(1);
+
+    const cleared = await correctConsumption(userId, logged.id, {
+      addedSugarG: 0,
+    }, { journal, now: new Date(at) });
+    expect(cleared.dietFlags).not.toContain('added-sugar');
+    expect(cleared.effects.find(effect => effect.effectKey === 'sugar')).toBeUndefined();
+    expect((await getAllEffects(userId, new Date(at))).some(effect => effect.effectKey === 'sugar')).toBe(false);
+  });
+
+  it('keeps another meal\'s sugar dose when this row is corrected', async () => {
+    const first = await logConsumption(userId, {
+      itemName: 'Soda',
+      calories: 140,
+      addedSugarG: 10,
+      consumedAt: '2026-10-27T18:00:00-05:00',
+      clientDate: '2026-10-27',
+    }, { journal });
+    const second = await logConsumption(userId, {
+      itemName: 'Tres Leches Slice',
+      calories: 540,
+      consumedAt: at,
+      clientDate: '2026-10-27',
+    }, { journal });
+    const corrected = await correctConsumption(userId, second.id, {
+      addedSugarG: 6,
+    }, { journal, now: new Date(at) });
+    expect(sugarGrams(corrected.effects.find(effect => effect.effectKey === 'sugar'))).toBe(16);
+    expect(corrected.mealCount).toBe(2);
+    expect(first.id).not.toBe(second.id);
+  });
+
+  it('stores total sugar without a flag or a Sugar Rush', async () => {
+    const logged = await logConsumption(userId, {
+      itemName: 'Apple',
+      calories: 95,
+      consumedAt: at,
+      clientDate: '2026-10-27',
+    }, { journal });
+    const corrected = await correctConsumption(userId, logged.id, {
+      totalSugarG: 19,
+      notes: 'Fruit sugar, none added',
+    }, { journal, now: new Date(at) });
+    expect(corrected.entry.totalSugarG).toBe(19);
+    expect(corrected.dietFlags).toEqual([]);
+    expect(corrected.effects.find(effect => effect.effectKey === 'sugar')).toBeUndefined();
+  });
+
+  it('flags seed oil from notes and adjusts water without wiping the day total', async () => {
+    const logged = await logConsumption(userId, {
+      itemName: 'Roasted Vegetables',
+      calories: 180,
+      consumedAt: at,
+      clientDate: '2026-10-27',
+    }, { journal });
+    journal.rows.set(`${userId}:2026-10-27`, {
+      ...journal.rows.get(`${userId}:2026-10-27`)!,
+      hydration_oz: 80,
+    });
+    const corrected = await correctConsumption(userId, logged.id, {
+      notes: 'Finished in canola oil',
+      waterOz: 8,
+      calories: 0,
+    }, { journal, now: new Date(at) });
+    expect(corrected.dietFlags).toContain('seed-oil');
+    expect(corrected.hydrationOz).toBe(88);
+    expect(corrected.mealCount).toBe(0);
+    expect(corrected.entry.calories).toBe(0);
+  });
+
+  it('matches a pre-id sugar dose by timestamp instead of appending a second one', async () => {
+    const logged = await logConsumption(userId, {
+      itemName: 'Tres Leches Slice',
+      calories: 540,
+      addedSugarG: 12,
+      consumedAt: at,
+      clientDate: '2026-10-27',
+    }, { journal });
+    const store = getStatusEffectStore();
+    const sugar = (await store.listAll(userId)).find(effect => effect.effectKey === 'sugar');
+    expect(sugar).toBeTruthy();
+    const doses = (sugar!.meta as { doses: Array<{ entryId?: string }> }).doses;
+    delete doses[0].entryId;
+    await store.update(userId, sugar!);
+
+    const corrected = await correctConsumption(userId, logged.id, {
+      addedSugarG: 8,
+    }, { journal, now: new Date(at) });
+    const next = corrected.effects.find(effect => effect.effectKey === 'sugar');
+    expect(sugarGrams(next)).toBe(8);
+    const nextDoses = (next?.meta as { doses: unknown[] }).doses;
+    expect(nextDoses).toHaveLength(1);
+  });
+
+  it('assigns an id when a legacy day is listed, then corrects that id', async () => {
+    journal.rows.set(`${userId}:2026-10-27`, {
+      user_id: userId,
+      entry_date: '2026-10-27',
+      protein_grams_logged: 9,
+      meal_count: 1,
+      food_log: [{ item: 'Tres Leches Slice', protein: 9, calories: 540, ts: at }],
+    });
+    const listed = await listConsumption(userId, '2026-10-27', { journal });
+    expect(listed.entries).toHaveLength(1);
+    expect(listed.entries[0].id).toBeTruthy();
+    const again = await listConsumption(userId, '2026-10-27', { journal });
+    expect(again.entries[0].id).toBe(listed.entries[0].id);
+
+    const corrected = await correctConsumption(userId, listed.entries[0].id, {
+      addedSugarG: 42.5,
+    }, { journal, now: new Date(at) });
+    expect(corrected.dietFlags).toContain('added-sugar');
+    expect(corrected.effects.find(effect => effect.name === 'Sugar Rush')?.dose).toBe('42.5 g added sugar');
+    expect(corrected.mealCount).toBe(1);
+    expect(corrected.proteinGrams).toBe(9);
+  });
+
+  it('returns 404 for an unknown id and does not cross users', async () => {
+    const logged = await logConsumption(userId, {
+      itemName: 'Apple',
+      calories: 95,
+      consumedAt: at,
+      clientDate: '2026-10-27',
+    }, { journal });
+    await expect(correctConsumption(userId, 'missing-id', { notes: 'nope' }, { journal }))
+      .rejects.toMatchObject({ code: 'not_found', status: 404 });
+    await expect(correctConsumption('someone-else', logged.id, { notes: 'nope' }, { journal }))
+      .rejects.toMatchObject({ code: 'not_found', status: 404 });
+  });
+
+  it('rejects an empty patch and a negative amount', async () => {
+    const logged = await logConsumption(userId, {
+      itemName: 'Apple',
+      calories: 95,
+      consumedAt: at,
+      clientDate: '2026-10-27',
+    }, { journal });
+    await expect(correctConsumption(userId, logged.id, { reason: 'no fields' }, { journal }))
+      .rejects.toMatchObject({ status: 400 });
+    await expect(correctConsumption(userId, logged.id, { addedSugarG: -1 }, { journal }))
+      .rejects.toMatchObject({ status: 400 });
   });
 });

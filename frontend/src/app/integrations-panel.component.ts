@@ -3,6 +3,8 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
 import { environment } from '../environments/environment';
+import { WearableConnectService, WearableProviderStatus } from './wearable-connect.service';
+import { WEARABLE_PROVIDERS, wearableStatusLabel } from './wearable-providers';
 
 interface TodoistConnectStatus {
   success: boolean;
@@ -10,6 +12,32 @@ interface TodoistConnectStatus {
   source: 'user' | 'env' | null;
   masked: string | null;
   error?: string;
+}
+
+interface WearableRow {
+  id: string;
+  title: string;
+  description: string;
+  note?: string;
+  connectPath: string;
+  statusLabel: string;
+  connected: boolean;
+  busy: boolean;
+  error: string | null;
+}
+
+function wearableRowsFromRegistry(): WearableRow[] {
+  return WEARABLE_PROVIDERS.map((provider) => ({
+    id: provider.id,
+    title: provider.title,
+    description: provider.description,
+    note: provider.note,
+    connectPath: provider.connectPath,
+    statusLabel: 'Loading connection status…',
+    connected: false,
+    busy: false,
+    error: null,
+  }));
 }
 
 @Component({
@@ -22,6 +50,33 @@ interface TodoistConnectStatus {
         <h3 class="eso-panel-title">Integrations</h3>
         <p class="muted">Connect third-party accounts. Keys are stored encrypted and never shown in full.</p>
       </section>
+
+      @for (row of wearableRows(); track row.id) {
+        <section class="eso-panel" [id]="'wearable-' + row.id">
+          <h3 class="eso-panel-title">{{ row.title }}</h3>
+          <p class="muted wearable-copy">{{ row.description }}</p>
+          @if (row.note) {
+            <p class="muted wearable-copy">{{ row.note }}</p>
+          }
+          <p class="status-row">{{ row.statusLabel }}</p>
+          <button
+            type="button"
+            class="btn primary wearable-action"
+            [id]="'wearable-' + row.id + '-connect'"
+            [disabled]="row.busy"
+            (click)="connectWearable(row.id)"
+          >
+            {{ row.connected ? 'Reconnect' : 'Connect' }}
+          </button>
+          @if (row.error) {
+            <p class="err" [id]="'wearable-' + row.id + '-error'">{{ row.error }}</p>
+          }
+        </section>
+      }
+
+      @if (wearablesError()) {
+        <p class="err">{{ wearablesError() }}</p>
+      }
 
       <section class="eso-panel">
         <h3 class="eso-panel-title">Todoist</h3>
@@ -96,12 +151,15 @@ interface TodoistConnectStatus {
     }
     .btn.primary { background: rgba(201,168,76,0.15); }
     .btn:disabled { opacity: 0.5; cursor: wait; }
+    .wearable-copy { margin: 0 0 0.45rem; }
+    .wearable-action { margin-top: 0.6rem; }
     .muted { color: #8a7a5a; font-size: 0.85rem; }
     .err { color: #eb5757; font-size: 0.85rem; margin-top: 0.6rem; }
   `],
 })
 export class IntegrationsPanelComponent implements OnInit {
   private readonly http = inject(HttpClient);
+  private readonly wearables = inject(WearableConnectService);
 
   loading = signal(true);
   busy = signal(false);
@@ -111,8 +169,12 @@ export class IntegrationsPanelComponent implements OnInit {
   source = signal<'user' | 'env' | null>(null);
   apiKey = '';
 
+  wearableRows = signal<WearableRow[]>(wearableRowsFromRegistry());
+  wearablesError = signal<string | null>(null);
+
   ngOnInit(): void {
     this.refresh();
+    this.refreshWearables();
   }
 
   refresh(): void {
@@ -154,6 +216,36 @@ export class IntegrationsPanelComponent implements OnInit {
     });
   }
 
+  refreshWearables(): void {
+    this.wearablesError.set(null);
+    this.wearables.status().subscribe({
+      next: (statuses) => this.applyWearableStatus(statuses),
+      error: (err) => {
+        this.wearablesError.set(err?.error?.error || 'Could not load wearable status');
+        this.wearableRows.update((rows) => rows.map((row) => ({
+          ...row,
+          statusLabel: wearableStatusLabel(null),
+          connected: false,
+        })));
+      },
+    });
+  }
+
+  connectWearable(id: string): void {
+    const current = this.wearableRows().find((row) => row.id === id);
+    if (!current || current.busy) return;
+    this.patchWearable(id, { busy: true, error: null });
+    this.wearables.connect(id, current.connectPath).subscribe({
+      error: (err: Error) => {
+        this.patchWearable(id, {
+          busy: false,
+          error: err.message || 'Could not start authorization.',
+        });
+      },
+      complete: () => this.patchWearable(id, { busy: false }),
+    });
+  }
+
   disconnect(): void {
     this.busy.set(true);
     this.error.set(null);
@@ -169,5 +261,25 @@ export class IntegrationsPanelComponent implements OnInit {
         this.error.set(err?.error?.error || 'Disconnect failed');
       },
     });
+  }
+
+  private applyWearableStatus(statuses: WearableProviderStatus[]): void {
+    const byId = new Map(statuses.map((status) => [status.id, status]));
+    this.wearableRows.update((rows) => rows.map((row) => {
+      const status = byId.get(row.id);
+      const snapshot = status
+        ? { configured: status.configured, connected: status.connected }
+        : null;
+      return {
+        ...row,
+        connectPath: status?.connectPath || row.connectPath,
+        connected: !!status?.connected,
+        statusLabel: wearableStatusLabel(snapshot),
+      };
+    }));
+  }
+
+  private patchWearable(id: string, patch: Partial<WearableRow>): void {
+    this.wearableRows.update((rows) => rows.map((row) => (row.id === id ? { ...row, ...patch } : row)));
   }
 }
