@@ -67,7 +67,11 @@ describe('awardDailyWearableMetrics', () => {
     awards = new MemoryWearableXpAwardStore();
     setWearableXpAwardStore(awards);
     setStatusEffectStore(new MemoryStatusEffectStore());
-    setHumeScanSource(null);
+    setHumeScanSource({
+      async listReadings() {
+        return [];
+      },
+    });
     mockLogActivity.mockReset().mockResolvedValue(undefined);
     mockGetActivityLog.mockReset().mockResolvedValue([]);
     mockPersist.mockReset().mockResolvedValue([]);

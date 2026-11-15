@@ -1,8 +1,10 @@
+import { MemoryBodyCompositionStore, setBodyCompositionStore } from './bodyComposition.store';
 import { adaptBodyCompositionReading, loadHumeScanSource, setHumeScanSource } from './humeScanSource';
 
 describe('Hume scan source', () => {
   afterEach(() => {
     setHumeScanSource(null);
+    setBodyCompositionStore(null);
   });
 
   it('adapts a PR #43 reading and treats the idempotency key as the app record', () => {
@@ -45,14 +47,19 @@ describe('Hume scan source', () => {
     });
   });
 
-  it('returns null while the body-composition store is absent, and uses a registered source', async () => {
-    expect(await loadHumeScanSource()).toBeNull();
+  it('uses a registered source, and otherwise lists the body-composition store', async () => {
     setHumeScanSource({
       async listReadings() {
         return [{ source: 'hume', measuredAt: '2026-11-09T15:00:00.000Z', proofRef: 'app-record:1' }];
       },
     });
-    const source = await loadHumeScanSource();
-    expect(await source!.listReadings('player-1')).toHaveLength(1);
+    const registered = await loadHumeScanSource();
+    expect(await registered!.listReadings('player-1')).toHaveLength(1);
+
+    setHumeScanSource(null);
+    setBodyCompositionStore(new MemoryBodyCompositionStore());
+    const loaded = await loadHumeScanSource();
+    expect(loaded).not.toBeNull();
+    expect(await loaded!.listReadings('player-1')).toEqual([]);
   });
 });
