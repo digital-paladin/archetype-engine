@@ -25,6 +25,7 @@ import {
   standardDrinks,
   zonedParts,
 } from './consumptionEffects';
+import { CaffeineIntake, intakesFromFoodDays, syncCaffeineRule } from './caffeineRule';
 import { applyCorrectionDraft, applyEffectDraft, getAllEffects } from './statusEffects.service';
 import { getStatusEffectStore, JsonResult } from './statusEffect.store';
 import { StatusEffect } from '../models/statusEffect';
@@ -310,6 +311,12 @@ async function resolveBedtime(
   return scheduled;
 }
 
+function describeEffect(effect: StatusEffect): string {
+  const mods = effect.effects.map(stat => `${stat.stat} ${stat.modifier}`).join(', ');
+  const dose = effect.dose ? ` (${effect.dose})` : '';
+  return mods ? `${effect.name}${dose}: ${mods}.` : `${effect.name}${dose}.`;
+}
+
 function noticeFor(result: Omit<ConsumptionResult, 'noticeBody' | 'idempotentReplay' | 'effectsError'>): string {
   const lines = [
     `Logged ${result.itemName}.`,
@@ -317,11 +324,7 @@ function noticeFor(result: Omit<ConsumptionResult, 'noticeBody' | 'idempotentRep
   if (result.effects.length === 0) {
     lines.push('No status effect changed.');
   } else {
-    for (const effect of result.effects) {
-      const mods = effect.effects.map(stat => `${stat.stat} ${stat.modifier}`).join(', ');
-      const dose = effect.dose ? ` (${effect.dose})` : '';
-      lines.push(`${effect.name}${dose}: ${mods}.`);
-    }
+    for (const effect of result.effects) lines.push(describeEffect(effect));
   }
   if (result.abstinencePrompt) lines.push(result.abstinencePrompt.message);
   if (result.dietFlags.length > 0) {
@@ -431,6 +434,12 @@ async function writeConsumption(
       localHour: zonedParts(normalized.consumedAt, cfg.timeZone).hour,
       config: cfg,
     });
+    if (normalized.caffeineMg > 0) {
+      effects = mergeEffects(effects, await syncCaffeineRule(
+        userId,
+        await loadCaffeineIntakes(journal, userId, clientDate),
+      ));
+    }
     emitToUser(io, userId, 'status-effects-updated', { at: now.toISOString() });
   } catch (err) {
     effectsError = err instanceof Error ? err.message : 'status effects failed';
@@ -1040,14 +1049,34 @@ function correctionNotice(
   if (changes.length > 0) lines.push(`${changes.join('; ')}.`);
   if (effects.length === 0) lines.push('No status effect changed.');
   else {
-    for (const effect of effects) {
-      const mods = effect.effects.map(stat => `${stat.stat} ${stat.modifier}`).join(', ');
-      const dose = effect.dose ? ` (${effect.dose})` : '';
-      lines.push(`${effect.name}${dose}: ${mods}.`);
-    }
+    for (const effect of effects) lines.push(describeEffect(effect));
   }
   if (dietFlags.length > 0) lines.push(`Diet flag: ${dietFlags.join(', ')}.`);
   return lines.join(' ').slice(0, 4000);
+}
+
+function mergeEffects(current: StatusEffect[], extra: StatusEffect[]): StatusEffect[] {
+  const merged = [...current];
+  for (const effect of extra) {
+    if (!merged.some(row => row.effectKey === effect.effectKey)) merged.push(effect);
+  }
+  return merged;
+}
+
+async function loadCaffeineIntakes(
+  journal: ConsumptionJournal,
+  userId: string,
+  aroundDate: string,
+): Promise<CaffeineIntake[]> {
+  if (journal.listJournalFoodDays) {
+    return intakesFromFoodDays(await journal.listJournalFoodDays(userId));
+  }
+  const days: Array<{ food_log?: FoodLogItem[] | null }> = [];
+  for (const delta of [-1, 0, 1]) {
+    const entry = await journal.getJournalEntry(userId, addCalendarDays(aroundDate, delta));
+    if (entry?.food_log) days.push({ food_log: entry.food_log });
+  }
+  return intakesFromFoodDays(days);
 }
 
 interface CorrectionTotals {
@@ -1110,6 +1139,14 @@ async function recalculateAfterCorrection(
       const drafts = projectHydration(totals.hydrationOz, zonedParts(hourSource, cfg.timeZone).hour, cfg);
       returned.push(...await applyHydrationDrafts(userId, drafts, hourSource, hydrated, dry));
     }
+  }
+
+  if (totals.before.caffeineMg > 0 || totals.after.caffeineMg > 0) {
+    const ruleEffects = await syncCaffeineRule(
+      userId,
+      await loadCaffeineIntakes(journal, userId, totals.date),
+    );
+    return mergeEffects(returned, ruleEffects);
   }
 
   return returned;
