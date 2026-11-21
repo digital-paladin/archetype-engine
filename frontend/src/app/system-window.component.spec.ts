@@ -5,6 +5,7 @@ import { SystemNoticeComponent } from './system-notice.component';
 import { SystemWindowComponent } from './system-window.component';
 import { SocketService } from './socket.service';
 import { formatCountdown, SystemQuestService } from './system-quest.service';
+import { chicagoDate } from './quest-progress';
 
 const TWO_HOURS = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
 
@@ -231,6 +232,41 @@ describe('System window', () => {
     fixture.detectChanges();
     expect(fixture.nativeElement.textContent).toContain('Parkour technique only');
     expect(fixture.nativeElement.querySelector('[data-testid="system-quest-edited"]').textContent).toContain('EDITED');
+  });
+
+  it('shows a quest bar, a near-miss, and Done for today', () => {
+    const today = chicagoDate(new Date());
+    fixture.componentInstance.reload();
+    const req = httpMock.expectOne(r => r.url.includes('/api/system/quests') && r.method === 'GET');
+    req.flush({
+      success: true,
+      quests: [
+        {
+          ...QUESTS[2],
+          kind: 'daily',
+          status: 'cleared',
+          scheduledFor: today,
+          title: 'Morning stretch',
+        },
+        {
+          ...QUESTS[3],
+          title: 'BOSS: Code for Cash 2026',
+          objectives: [
+            { id: 'scope', label: 'Scope the offer', target: 1, progress: 1, done: true },
+            { id: 'draft', label: 'Draft the page', target: 1, progress: 1, done: true },
+            { id: 'ship', label: 'Ship the page', target: 1, progress: 0, done: false },
+          ],
+        },
+      ],
+    });
+    fixture.detectChanges();
+    const text = fixture.nativeElement.textContent as string;
+    expect(text).toContain('Done for today');
+    expect(text).toContain('BOSS: Code for Cash 2026');
+    expect(text).toContain('2 of 3 objectives');
+    expect(fixture.nativeElement.querySelector('[data-testid="quest-progress"] [role="progressbar"]')).toBeTruthy();
+    expect(fixture.nativeElement.querySelector('[data-testid="near-miss"]').textContent).toContain('1 step to clear');
+    expect(text).not.toContain("you'll lose your streak");
   });
 
   it('shows a generated service token once', () => {

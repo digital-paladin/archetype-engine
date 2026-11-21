@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { XpCalculationService, XPCalculation } from './xp-calculation.service';
 import { ConsolidationService, ConsolidationResult } from './consolidation.service';
 import { LevelProgressionService, SkillClass, LevelUpResult } from './level-progression.service';
+import { formatXpToNextLevel } from './quest-progress';
 
 /**
  * XP Calculator Component
@@ -228,6 +229,7 @@ import { LevelProgressionService, SkillClass, LevelUpResult } from './level-prog
               <span class="class-name">{{ cls.name }}</span>
             </div>
             <div class="class-level">Level {{ cls.currentLevel }}</div>
+            <div class="xp-to-next" data-testid="xp-to-next-level">{{ xpToNextLabel(cls) }}</div>
             <div class="class-tier">{{ cls.tier }}</div>
             <div class="xp-progress-bar">
               <div class="xp-progress-fill" 
@@ -516,6 +518,11 @@ import { LevelProgressionService, SkillClass, LevelUpResult } from './level-prog
       color: #f2c96a; margin-bottom: 4px;
       text-shadow: 0 0 10px rgba(201,168,76,0.3);
     }
+    .xp-to-next {
+      font-size: 12px;
+      color: #e2cfa8;
+      margin-bottom: 6px;
+    }
     .class-tier {
       font-size: 10px; color: #a08858;
       text-transform: uppercase; letter-spacing: 1px;
@@ -588,6 +595,11 @@ export class XpCalculatorComponent implements OnInit {
 
   loadSkillClasses(): void {
     this.skillClasses = this.levelProg.getAllSkillClasses();
+  }
+
+  xpToNextLabel(cls: SkillClass): string {
+    const threshold = cls.xpForNextLevel || this.levelProg.xpRemainingToNextLevel(cls.currentLevel, 0);
+    return formatXpToNextLevel(cls.currentLevel, cls.currentXP, threshold);
   }
 
   loadAvailableBonuses(): void {

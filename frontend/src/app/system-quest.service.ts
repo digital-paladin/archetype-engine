@@ -32,6 +32,8 @@ export interface SystemQuest {
   source: string;
   createdAt: string;
   deadline: string | null;
+  /** Civil date (YYYY-MM-DD) the quest is for. Daily "done for today" uses America/Chicago. */
+  scheduledFor?: string | null;
   title: string | null;
   description: string | null;
   objectives: SystemObjective[];

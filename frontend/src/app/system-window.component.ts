@@ -2,6 +2,12 @@ import { Component, OnDestroy, OnInit, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { SystemQuest, SystemQuestService, formatCountdown } from './system-quest.service';
+import {
+  QuestProgress,
+  chicagoDate,
+  isDoneForToday,
+  questObjectiveProgress,
+} from './quest-progress';
 
 @Component({
   selector: 'app-system-window',
@@ -21,6 +27,8 @@ import { SystemQuest, SystemQuestService, formatCountdown } from './system-quest
       </header>
 
       <p class="sys-error" *ngIf="system.error()">{{ system.error() }}</p>
+
+      <p class="sys-done" *ngIf="doneForToday()" data-testid="done-for-today">Done for today</p>
 
       <div class="sys-empty" *ngIf="activeQuests.length === 0">
         <p class="sys-kicker">[SYSTEM]</p>
@@ -45,6 +53,18 @@ import { SystemQuest, SystemQuestService, formatCountdown } from './system-quest
           <p class="sys-edited-reason" *ngIf="quest.lastEditReason" data-testid="system-edit-reason">{{ quest.lastEditReason }}</p>
           <p class="sys-desc" *ngIf="quest.description">{{ quest.description }}</p>
           <p class="sys-flag" *ngIf="quest.thursdayTrainingFlag">Thursday rest day — this quest is flagged as training.</p>
+
+          <div class="sys-quest-progress" *ngIf="progress(quest).total > 0" data-testid="quest-progress">
+            <span class="sys-bar sys-quest-bar" role="progressbar"
+                  [attr.aria-valuemin]="0"
+                  [attr.aria-valuenow]="progress(quest).completed"
+                  [attr.aria-valuemax]="progress(quest).total"
+                  [attr.aria-label]="progress(quest).label">
+              <span [style.width.%]="progress(quest).percent"></span>
+            </span>
+            <span class="sys-progress-label">{{ progress(quest).label }}</span>
+            <span class="sys-near" *ngIf="progress(quest).nearMiss" data-testid="near-miss">{{ progress(quest).nearMissLabel }}</span>
+          </div>
 
           <ul class="sys-objectives">
             <li *ngFor="let objective of quest.objectives" [class.done]="objective.done">
@@ -183,6 +203,30 @@ import { SystemQuest, SystemQuestService, formatCountdown } from './system-quest
     .sys-obj-count { float: right; color: #8eb7ff; }
     .sys-bar { display: block; height: 4px; margin-top: 4px; background: rgba(255,255,255,0.08); }
     .sys-bar > span { display: block; height: 100%; background: #7eb6ff; }
+    .sys-done {
+      margin: 14px 0 0;
+      padding: 10px 14px;
+      border: 1px solid rgba(157, 255, 168, 0.35);
+      background: rgba(40, 80, 60, 0.28);
+      color: #d7ffe4;
+      letter-spacing: 0.14em;
+      font-size: 13px;
+    }
+    .sys-quest-progress {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px 12px;
+      margin: 12px 0 4px;
+    }
+    .sys-quest-bar { flex: 1; min-width: 140px; height: 8px; margin-top: 0; }
+    .sys-progress-label { font-family: 'Open Sans', sans-serif; font-size: 13px; color: #d7e7ff; }
+    .sys-near {
+      font-family: 'Open Sans', sans-serif;
+      font-size: 12px;
+      letter-spacing: 0.03em;
+      color: rgba(215, 231, 255, 0.72);
+    }
     .sys-objectives li.done .sys-obj-label { color: #9dffa8; }
     .sys-clock { font-variant-numeric: tabular-nums; color: #fff; }
     .sys-money { margin-top: 10px; padding: 10px; border: 1px dashed rgba(255, 210, 122, 0.7); }
@@ -233,6 +277,14 @@ export class SystemWindowComponent implements OnInit, OnDestroy {
 
   get resolvedQuests(): SystemQuest[] {
     return this.system.quests().filter(q => q.status !== 'active').slice(0, 8);
+  }
+
+  progress(quest: SystemQuest): QuestProgress {
+    return questObjectiveProgress(quest.objectives);
+  }
+
+  doneForToday(): boolean {
+    return isDoneForToday(this.system.quests(), chicagoDate(new Date()));
   }
 
   countdown(quest: SystemQuest): string {

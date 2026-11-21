@@ -6,6 +6,7 @@ import { HttpClientTestingModule, HttpTestingController } from '@angular/common/
 import { EMPTY, Subject } from 'rxjs';
 import { QuestsPanelComponent } from './quests-panel.component';
 import { SocketService } from './socket.service';
+import { chicagoDate } from './quest-progress';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -46,6 +47,7 @@ describe('QuestsPanelComponent', () => {
 
     const socketMock = {
       onJournalUpdate: vi.fn().mockReturnValue(journalSubject.asObservable()),
+      onSystemNotice: vi.fn().mockReturnValue(EMPTY),
     };
 
     await TestBed.configureTestingModule({
@@ -59,6 +61,9 @@ describe('QuestsPanelComponent', () => {
   });
 
   afterEach(() => {
+    httpMock.match(r => r.url.includes('/api/system/quests')).forEach(req => {
+      req.flush({ success: true, quests: [] });
+    });
     httpMock.verify();
     vi.restoreAllMocks();
   });
@@ -216,6 +221,88 @@ describe('QuestsPanelComponent', () => {
 
     it('returns false for whitespace-only value', () => {
       expect(component.isLogged({ label: 'x', value: '   ' })).toBe(false);
+    });
+  });
+
+  describe('progress cues', () => {
+    const boss = {
+      id: 'boss-cfc',
+      kind: 'acquisition',
+      status: 'active',
+      hidden: false,
+      revealed: true,
+      source: 'user',
+      createdAt: '2026-11-01T00:00:00.000Z',
+      deadline: null,
+      scheduledFor: null,
+      title: 'BOSS: Code for Cash 2026',
+      description: 'Three steps to ship the offer.',
+      objectives: [
+        { id: 'scope', label: 'Scope the offer', target: 1, progress: 1, done: true },
+        { id: 'draft', label: 'Draft the page', target: 1, progress: 1, done: true },
+        { id: 'ship', label: 'Ship the page', target: 1, progress: 0, done: false },
+      ],
+      xpReward: {},
+      rewardNote: null,
+      rewardCostsMoney: false,
+      rewardApproval: 'not_required',
+      penalty: null,
+      training: false,
+      thursdayTrainingFlag: false,
+      recoveryType: null,
+      resolution: null,
+      resolvedAt: null,
+    };
+
+    function daily(status: string, scheduledFor: string) {
+      return {
+        ...boss,
+        id: `daily-${status}-${scheduledFor}`,
+        kind: 'daily',
+        status,
+        scheduledFor,
+        title: 'Morning stretch',
+        objectives: [{ id: 'stretch', label: 'Stretch', target: 1, progress: status === 'cleared' ? 1 : 0, done: status === 'cleared' }],
+      };
+    }
+
+    it('shows a bar, objective count, and a near-miss on a multi-objective quest', () => {
+      fixture.detectChanges();
+      httpMock.expectOne(r => r.url.includes('/api/quests/today')).flush(apiRes(CLASSES));
+      const today = chicagoDate(new Date());
+      httpMock.expectOne(r => r.url.includes('/api/system/quests')).flush({
+        success: true,
+        quests: [boss, daily('cleared', today)],
+      });
+      fixture.detectChanges();
+
+      const root: HTMLElement = fixture.nativeElement;
+      const text = root.textContent ?? '';
+      expect(text).toContain('BOSS: Code for Cash 2026');
+      expect(text).toContain('2 of 3 objectives');
+      expect(text).toContain('Scope the offer');
+      expect(text).toContain('Ship the page');
+      expect(root.querySelector('[data-testid="quest-progress"] [role="progressbar"]')).toBeTruthy();
+      expect(root.querySelector('[data-testid="quest-progress"] [data-testid="near-miss"]')?.textContent)
+        .toContain('1 step to clear');
+      expect(text).toContain('Done for today');
+      expect(text).toContain('1 of 2 objectives');
+      const zone = root.querySelector('[data-testid="zone-progress"]');
+      expect(zone?.querySelector('[role="progressbar"]')).toBeTruthy();
+      expect(zone?.textContent).toContain('1 step to clear');
+    });
+
+    it('does not show Done for today when a daily quest for today is still active', () => {
+      fixture.detectChanges();
+      httpMock.expectOne(r => r.url.includes('/api/quests/today')).flush(apiRes([]));
+      const today = chicagoDate(new Date());
+      httpMock.expectOne(r => r.url.includes('/api/system/quests')).flush({
+        success: true,
+        quests: [daily('active', today)],
+      });
+      fixture.detectChanges();
+      expect(fixture.nativeElement.textContent).not.toContain('Done for today');
+      expect(fixture.nativeElement.textContent).toContain('0 of 1 objective');
     });
   });
 
