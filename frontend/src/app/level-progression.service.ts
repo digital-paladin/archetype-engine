@@ -68,6 +68,14 @@ export class LevelProgressionService {
     if (level <= 1) return 0;
     return Math.floor(100 * Math.pow(level, 1.5));
   }
+
+  /**
+   * XP still required to reach the next level on this service's curve.
+   * Uses calculateXPForLevel. Does not change how XP is paid.
+   */
+  xpRemainingToNextLevel(level: number, currentXp: number): number {
+    return Math.max(0, this.calculateXPForLevel(level + 1) - currentXp);
+  }
   
   /**
    * Calculate cumulative XP needed to reach a level from level 1

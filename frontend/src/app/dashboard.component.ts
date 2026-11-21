@@ -46,6 +46,7 @@ import { IntegrationsPanelComponent } from './integrations-panel.component';
 import { SystemWindowComponent } from './system-window.component';
 import { SystemNoticeComponent } from './system-notice.component';
 import { SystemQuestService } from './system-quest.service';
+import { formatXpToNextLevel } from './quest-progress';
 
 type PanelId = 'character' | 'skills' | 'health' | 'xp' | 'consumables' | 'sleep' | 'acm' | 'nutrition' | 'quests' | 'system' | 'quest-lines' | 'analytics' | 'buffs' | 'vault' | 'courage' | 'rewards' | 'treasury' | 'inventory' | 'crafting' | 'todoist' | 'billing' | 'integrations';
 
@@ -322,6 +323,7 @@ const NAV_TABS: { id: PanelId; icon: string; label: string }[] = [
                       <!-- Prefer live DB stats; fall back to file-parsed projections -->
                       <ng-container *ngIf="getDbClassStat(className) as dbStat; else fileXp">
                         <span class="eso-xp-level-badge">L{{ dbStat.level }}</span>
+                        <span class="eso-xp-to-next" data-testid="xp-to-next-level">{{ xpToNextLabel(dbStat) }}</span>
                         <span class="eso-xp-total-val">{{ dbStat.currentXP }} / {{ dbStat.xpToNextLevel }} XP</span>
                         <span class="eso-xp-pct">({{ dbStat.percentToNext }}%)</span>
                         <span class="eso-xp-daily-val">+{{ xpProjection()?.[className]?.avgDailyXP }}/day</span>
@@ -892,6 +894,10 @@ export class DashboardComponent implements OnInit, OnDestroy {
    * 'Warrior', 'Sage', etc. as returned by /api/character/stats → skillTrees[].name).
    * Returns null when character_stats hasn't been seeded yet (falls back to file data).
    */
+  xpToNextLabel(stat: { level: number; currentXP: number; xpToNextLevel: number }): string {
+    return formatXpToNextLevel(stat.level, stat.currentXP, stat.xpToNextLevel);
+  }
+
   getDbClassStat(className: string): { level: number; currentXP: number; xpToNextLevel: number; percentToNext: number } | null {
     const trees = this.dbSkillTrees();
     if (!trees) return null;

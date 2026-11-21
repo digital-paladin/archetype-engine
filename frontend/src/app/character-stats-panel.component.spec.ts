@@ -55,6 +55,9 @@ describe('CharacterStatsPanelComponent', () => {
     expect(component.isLoading()).toBe(false);
     expect(component.lifts()).toEqual([]);
     expect(component.classes()).toHaveLength(1);
+    expect(fixture.nativeElement.textContent).toContain('1 XP to level 27');
+    expect(fixture.nativeElement.querySelector('[data-testid="xp-to-next-level"]')?.textContent)
+      .toContain('1 XP to level 27');
     expect(fixture.nativeElement.querySelector('[data-testid="body-composition"]')).toBeNull();
   });
 

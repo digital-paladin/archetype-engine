@@ -6,6 +6,15 @@ import { Subject, Subscription } from 'rxjs';
 import { debounceTime } from 'rxjs/operators';
 import { environment } from '../environments/environment';
 import { SocketService } from './socket.service';
+import { SystemQuest, SystemQuestService } from './system-quest.service';
+import {
+  ObjectiveProgress,
+  QuestProgress,
+  chicagoDate,
+  isDoneForToday,
+  objectiveIsDone,
+  questObjectiveProgress,
+} from './quest-progress';
 
 interface QuestField { label: string; value: string; }
 interface QuestClass { name: string; fields: QuestField[]; }
@@ -40,6 +49,31 @@ const CLASS_META: Record<string, { icon: string; color: string; lore: string }> 
   template: `
     <div class="qj-shell">
 
+      <div class="qj-cue-band" *ngIf="doneForToday() || activeSystemQuests().length">
+        <p class="qj-done" *ngIf="doneForToday()" data-testid="done-for-today">Done for today</p>
+        <article class="qj-cue-quest" data-testid="quest-progress" *ngFor="let quest of activeSystemQuests()">
+          <h3 class="qj-cue-title">{{ quest.title }}</h3>
+          <div class="qj-meter" *ngIf="progressFor(quest).total > 0">
+            <div class="qj-meter-track" role="progressbar"
+                 [attr.aria-valuemin]="0"
+                 [attr.aria-valuenow]="progressFor(quest).completed"
+                 [attr.aria-valuemax]="progressFor(quest).total"
+                 [attr.aria-label]="progressFor(quest).label">
+              <div class="qj-meter-fill" [style.width.%]="progressFor(quest).percent"></div>
+            </div>
+            <span class="qj-meter-label">{{ progressFor(quest).label }}</span>
+            <span class="qj-near" *ngIf="progressFor(quest).nearMiss" data-testid="near-miss">{{ progressFor(quest).nearMissLabel }}</span>
+          </div>
+          <ul class="qj-cue-steps" *ngIf="quest.objectives.length > 1">
+            <li *ngFor="let objective of quest.objectives" [class.is-done]="objectiveComplete(objective)">
+              <span class="qj-cue-mark">{{ objectiveComplete(objective) ? '✓' : '◆' }}</span>
+              {{ objective.label }}
+            </li>
+          </ul>
+        </article>
+      </div>
+
+      <div class="qj-body">
       <!-- ── LEFT: Zone / Quest list ───────────────────────────────── -->
       <div class="qj-left">
         <div class="qj-left-header">
@@ -58,9 +92,18 @@ const CLASS_META: Record<string, { icon: string; color: string; lore: string }> 
               <span class="zone-arrow">{{ isExpanded(cls.name) ? '▼' : '▶' }}</span>
               <span class="zone-icon" [style.color]="classMeta(cls.name).color">{{ classMeta(cls.name).icon }}</span>
               <span class="zone-name">{{ cls.name | uppercase }}</span>
-              <span class="zone-progress" *ngIf="classLoggedCount(cls) > 0 && !isExpanded(cls.name)">
-                {{ classLoggedCount(cls) }}/{{ cls.fields.length }}
-              </span>
+            </div>
+
+            <div class="qj-meter qj-zone-meter" *ngIf="fieldProgress(cls).total > 0" data-testid="zone-progress">
+              <div class="qj-meter-track" role="progressbar"
+                   [attr.aria-valuemin]="0"
+                   [attr.aria-valuenow]="fieldProgress(cls).completed"
+                   [attr.aria-valuemax]="fieldProgress(cls).total"
+                   [attr.aria-label]="fieldProgress(cls).label">
+                <div class="qj-meter-fill" [style.width.%]="fieldProgress(cls).percent"></div>
+              </div>
+              <span class="qj-meter-label">{{ fieldProgress(cls).label }}</span>
+              <span class="qj-near" *ngIf="fieldProgress(cls).nearMiss" data-testid="near-miss">{{ fieldProgress(cls).nearMissLabel }}</span>
             </div>
 
             <!-- Quest fields under this zone -->
@@ -138,6 +181,7 @@ const CLASS_META: Record<string, { icon: string; color: string; lore: string }> 
 
         </div>
       </div>
+      </div>
 
     </div>
   `,
@@ -145,12 +189,83 @@ const CLASS_META: Record<string, { icon: string; color: string; lore: string }> 
     /* ── ESO Quest Journal Shell ─────────────────────────────────── */
     :host { display: block; height: 100%; }
     .qj-shell {
-      display: flex; height: 100%; min-height: 520px;
+      display: flex; flex-direction: column; height: 100%; min-height: 520px;
       background: var(--eso-bg-panel, #100e07);
       border: 1px solid var(--eso-border, rgba(155,115,38,0.45));
       font-family: 'Cinzel', serif;
       overflow: hidden;
     }
+    .qj-body { display: flex; flex: 1; min-height: 0; }
+
+    .qj-cue-band {
+      flex-shrink: 0;
+      max-height: 240px;
+      overflow-y: auto;
+      padding: 12px 16px 10px;
+      border-bottom: 1px solid rgba(155,115,38,0.35);
+      background: rgba(0,0,0,0.18);
+    }
+    .qj-done {
+      margin: 0 0 10px;
+      padding: 8px 12px;
+      border: 1px solid rgba(111, 207, 125, 0.35);
+      background: rgba(40, 70, 48, 0.28);
+      color: #c8efd0;
+      font-size: 12px;
+      letter-spacing: 0.16em;
+    }
+    .qj-cue-quest + .qj-cue-quest { margin-top: 12px; }
+    .qj-cue-title {
+      margin: 0 0 6px;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      color: var(--eso-gold-bright, #f2c96a);
+    }
+    .qj-meter {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px 10px;
+    }
+    .qj-meter-track {
+      flex: 1;
+      min-width: 96px;
+      height: 8px;
+      background: rgba(0,0,0,0.45);
+      border: 1px solid rgba(155,115,38,0.35);
+      overflow: hidden;
+    }
+    .qj-meter-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #9a7830, #f2c96a);
+    }
+    .qj-meter-label {
+      font-size: 11px;
+      letter-spacing: 0.04em;
+      color: var(--eso-text, #e2cfa8);
+    }
+    .qj-near {
+      font-size: 11px;
+      letter-spacing: 0.04em;
+      color: rgba(226, 207, 168, 0.72);
+    }
+    .qj-zone-meter { padding: 0 14px 8px 31px; }
+    .qj-cue-steps {
+      list-style: none;
+      margin: 8px 0 0;
+      padding: 0;
+    }
+    .qj-cue-steps li {
+      display: flex;
+      gap: 8px;
+      margin: 3px 0;
+      font-family: 'Open Sans', sans-serif;
+      font-size: 12px;
+      color: var(--eso-text-dim, #a08858);
+    }
+    .qj-cue-steps li.is-done { color: #c8efd0; }
+    .qj-cue-mark { width: 12px; flex-shrink: 0; color: var(--eso-gold, #c9a84c); }
 
     /* ── LEFT PANE ───────────────────────────────────────────────── */
     .qj-left {
@@ -181,7 +296,6 @@ const CLASS_META: Record<string, { icon: string; color: string; lore: string }> 
     .zone-arrow  { font-size: 9px; color: var(--eso-gold, #c9a84c); width: 10px; flex-shrink: 0; }
     .zone-icon   { font-size: 13px; flex-shrink: 0; }
     .zone-name   { flex: 1; font-size: 11px; font-weight: 700; letter-spacing: 1.5px; color: var(--eso-text, #e2cfa8); }
-    .zone-progress { font-size: 9px; color: var(--eso-gold, #c9a84c); font-weight: 700; }
 
     /* Quest field rows */
     .qj-field-list { background: rgba(0,0,0,0.22); padding-bottom: 2px; }
@@ -302,7 +416,8 @@ const CLASS_META: Record<string, { icon: string; color: string; lore: string }> 
 
     /* ── Mobile: stack quest list above detail pane ── */
     @media (max-width: 480px) {
-      .qj-shell { flex-direction: column; min-height: unset; }
+      .qj-shell { min-height: unset; }
+      .qj-body { flex-direction: column; }
       .qj-left  {
         width: 100%; min-width: unset; max-height: 220px;
         border-right: none;
@@ -315,6 +430,7 @@ const CLASS_META: Record<string, { icon: string; color: string; lore: string }> 
 export class QuestsPanelComponent implements OnInit, OnDestroy {
   private http          = inject(HttpClient);
   private socketService = inject(SocketService);
+  private system        = inject(SystemQuestService);
 
   isLoading    = signal(true);
   saveStatus   = signal<'idle' | 'saving' | 'saved'>('idle');
@@ -382,6 +498,26 @@ export class QuestsPanelComponent implements OnInit, OnDestroy {
     return CLASS_META[name] ?? { icon: '◆', color: '#c9a84c', lore: 'Press forward. The path continues.' };
   }
 
+  activeSystemQuests(): SystemQuest[] {
+    return this.system.quests().filter(quest => quest.status === 'active' && !quest.hidden && !!quest.title);
+  }
+
+  progressFor(quest: SystemQuest): QuestProgress {
+    return questObjectiveProgress(quest.objectives);
+  }
+
+  fieldProgress(cls: QuestClass): QuestProgress {
+    return questObjectiveProgress(cls.fields.map(field => ({ done: this.isLogged(field) })));
+  }
+
+  objectiveComplete(objective: ObjectiveProgress): boolean {
+    return objectiveIsDone(objective);
+  }
+
+  doneForToday(): boolean {
+    return isDoneForToday(this.system.quests(), chicagoDate(new Date()));
+  }
+
   // ── Save / load infrastructure ────────────────────────────────────
   private fieldQueues      = new Map<string, Subject<string>>();
   private activeSaves      = 0;
@@ -425,6 +561,7 @@ export class QuestsPanelComponent implements OnInit, OnDestroy {
   ngOnInit(): void {
     this.dateChanged.emit(this.todayStr); // Sync parent on panel open/re-open
     this.loadQuests();
+    this.system.refresh();
 
     // WebSocket: instant reload when the journal file changes on disk
     this.socketSub = this.socketService.onJournalUpdate().subscribe(() => {

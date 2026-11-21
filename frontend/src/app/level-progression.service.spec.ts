@@ -66,6 +66,13 @@ describe('LevelProgressionService', () => {
         expect(service.calculateXPForLevel(i + 1)).toBeGreaterThan(service.calculateXPForLevel(i));
       }
     });
+
+    it('xpRemainingToNextLevel is the existing next-level threshold minus current XP', () => {
+      expect(service.xpRemainingToNextLevel(20, 0)).toBe(service.calculateXPForLevel(21));
+      expect(service.xpRemainingToNextLevel(20, 100)).toBe(service.calculateXPForLevel(21) - 100);
+      expect(service.xpRemainingToNextLevel(1, 0)).toBe(service.calculateXPForLevel(2));
+      expect(service.xpRemainingToNextLevel(9, service.calculateXPForLevel(10))).toBe(0);
+    });
   });
 
   // ─────────────────────────────────────────────────────────────
