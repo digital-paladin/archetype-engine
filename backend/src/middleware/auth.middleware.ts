@@ -42,14 +42,13 @@ export async function resolveCredential(token: string): Promise<ResolvedAuth | n
   try {
     const sb = getSupabaseAdmin();
     const { data: profiles } = await sb
-      .from('character_profiles')
-      .select('user_id, rpg_stats')
-      .neq('rpg_stats', null);
+      .from('character_profile')
+      .select('user_id')
+      .eq('rpg_stats->>api_key', token)
+      .limit(1);
 
-    if (profiles) {
-      const match = profiles.find((p: { user_id: string; rpg_stats?: { api_key?: string } }) => p.rpg_stats?.api_key === token);
-      if (match) return { userId: match.user_id, authKind: 'user' };
-    }
+    const match = profiles?.[0];
+    if (match?.user_id) return { userId: match.user_id, authKind: 'user' };
   } catch {
     // DB lookup failed — fall through to reject
   }
