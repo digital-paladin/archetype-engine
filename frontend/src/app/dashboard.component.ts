@@ -47,6 +47,7 @@ import { SystemWindowComponent } from './system-window.component';
 import { SystemNoticeComponent } from './system-notice.component';
 import { SystemQuestService } from './system-quest.service';
 import { formatXpToNextLevel } from './quest-progress';
+import { ObjectivesTrackerComponent } from './objectives-tracker.component';
 
 type PanelId = 'character' | 'skills' | 'health' | 'xp' | 'consumables' | 'sleep' | 'acm' | 'nutrition' | 'quests' | 'system' | 'quest-lines' | 'analytics' | 'buffs' | 'vault' | 'courage' | 'rewards' | 'treasury' | 'inventory' | 'crafting' | 'todoist' | 'billing' | 'integrations';
 
@@ -76,7 +77,7 @@ const NAV_TABS: { id: PanelId; icon: string; label: string }[] = [
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [CommonModule, QuickLogComponent, CharacterDisplayComponent, BodyDiagramComponent, XpCalculatorComponent, ConsumablesComponent, AbilityHotbarComponent, ActivitySessionPanelComponent, SleepPanelComponent, FoodLogPanelComponent, ActivityFeedComponent, AcmPanelComponent, QuestsPanelComponent, SkillsPanelComponent, LootDropOverlayComponent, CharacterStatsPanelComponent, ProgressionAnalyticsComponent, CollectionsPanelComponent, StatusEffectsPanelComponent, VaultPanelComponent, CouragePanelComponent, RewardsCatalogPanelComponent, TreasuryPanelComponent, QuestLinesPanelComponent, InventoryComponent, CraftingStationComponent, TodoistPanelComponent, BillingPanelComponent, IntegrationsPanelComponent, SystemWindowComponent, SystemNoticeComponent],
+  imports: [CommonModule, QuickLogComponent, CharacterDisplayComponent, BodyDiagramComponent, XpCalculatorComponent, ConsumablesComponent, AbilityHotbarComponent, ActivitySessionPanelComponent, SleepPanelComponent, FoodLogPanelComponent, ActivityFeedComponent, AcmPanelComponent, QuestsPanelComponent, SkillsPanelComponent, LootDropOverlayComponent, CharacterStatsPanelComponent, ProgressionAnalyticsComponent, CollectionsPanelComponent, StatusEffectsPanelComponent, VaultPanelComponent, CouragePanelComponent, RewardsCatalogPanelComponent, TreasuryPanelComponent, QuestLinesPanelComponent, InventoryComponent, CraftingStationComponent, TodoistPanelComponent, BillingPanelComponent, IntegrationsPanelComponent, SystemWindowComponent, SystemNoticeComponent, ObjectivesTrackerComponent],
   template: `
     <div class="eso-game-frame">
 
@@ -121,6 +122,12 @@ const NAV_TABS: { id: PanelId; icon: string; label: string }[] = [
         <!-- Left Column: Status + Character -->
         <aside class="eso-left-column">
 
+          <app-objectives-tracker
+            [food]="foodData()"
+            [vitals]="vitalsData()">
+          </app-objectives-tracker>
+
+          <div class="eso-left-scroll">
           <!-- Vitality / Status Panel -->
           <section class="eso-panel eso-status-panel">
             <h3 class="eso-panel-title">Status</h3>
@@ -289,6 +296,7 @@ const NAV_TABS: { id: PanelId; icon: string; label: string }[] = [
           <section class="eso-panel">
             <app-status-effects-panel [compact]="true"></app-status-effects-panel>
           </section>
+          </div>
 
         </aside>
 
