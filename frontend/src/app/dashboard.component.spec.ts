@@ -10,6 +10,7 @@ import { provideRouter } from '@angular/router';
 import { EMPTY, of } from 'rxjs';
 import { CommonModule } from '@angular/common';
 import { DashboardComponent } from './dashboard.component';
+import { ObjectivesTrackerComponent } from './objectives-tracker.component';
 import { QuickLogComponent } from './quick-log.component';
 import { SocketService } from './socket.service';
 import { XpProjectionService } from './xp-projection.service';
@@ -157,7 +158,7 @@ describe('DashboardComponent Quick Log', () => {
       ],
     })
       .overrideComponent(DashboardComponent, {
-        set: { imports: [CommonModule, QuickLogComponent, ...PANEL_STUBS] },
+        set: { imports: [CommonModule, QuickLogComponent, ObjectivesTrackerComponent, ...PANEL_STUBS] },
       })
       .compileComponents();
 
@@ -228,7 +229,7 @@ describe('DashboardComponent stored vitals', () => {
       ],
     })
       .overrideComponent(DashboardComponent, {
-        set: { imports: [CommonModule, QuickLogComponent, ...PANEL_STUBS] },
+        set: { imports: [CommonModule, QuickLogComponent, ObjectivesTrackerComponent, ...PANEL_STUBS] },
       })
       .compileComponents();
 
