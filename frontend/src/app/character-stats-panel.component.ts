@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { finalize } from 'rxjs';
 import { environment } from '../environments/environment';
+import { formatXpToNextLevel } from './quest-progress';
 
 interface SkillTreeStat {
   id: string;
@@ -118,7 +119,7 @@ const TIER_CLASS: Record<string, string> = {
           <div class="cs-char-name">Your Archetype</div>
           <div class="cs-char-class">
             {{ primaryClass()?.name ?? 'Adventurer' }}
-            <span *ngIf="primaryClass()"> — Level {{ primaryClass()!.level }}</span>
+            <span *ngIf="primaryClass() as primary"> — Level {{ primary.level }} · {{ xpToNextLabel(primary) }}</span>
           </div>
         </div>
         <div class="cs-equip-bonus">
@@ -274,6 +275,7 @@ const TIER_CLASS: Record<string, string> = {
             <span class="cs-class-lv" [ngClass]="getTierClass(cls.tier)">L{{ cls.level }}</span>
             <span class="cs-class-rust">{{ getRustIcon(cls.rustStatus) }}</span>
           </div>
+          <div class="cs-xp-next" data-testid="xp-to-next-level">{{ xpToNextLabel(cls) }}</div>
           <div class="cs-xp-row">
             <div class="cs-xp-track"><div class="cs-xp-fill" [style.width.%]="cls.percentToNext"></div></div>
             <span class="cs-xp-pct">{{ cls.percentToNext | number:'1.0-0' }}%</span>
@@ -457,7 +459,7 @@ const TIER_CLASS: Record<string, string> = {
     .cs-collapse { font-size: 9px; color: rgba(168,145,88,0.45); }
 
     .cs-class-grid {
-      display: grid; grid-template-columns: repeat(auto-fill, minmax(155px, 1fr)); gap: 7px;
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 7px;
     }
     .cs-class-card {
       background: rgba(0,0,0,0.40); border: 1px solid rgba(155,115,38,0.22);
@@ -482,6 +484,10 @@ const TIER_CLASS: Record<string, string> = {
     .tier-adept  { color: #4ade80; border-color: #4ade80 !important; }
     .tier-novice { color: var(--eso-text-dim, #a08858); border-color: var(--eso-text-dim, #a08858) !important; }
 
+    .cs-xp-next {
+      font-size: 9px; letter-spacing: 0.2px; line-height: 1.35;
+      color: var(--eso-gold, #c9a84c); margin: -2px 0 6px;
+    }
     .cs-xp-row { display: flex; align-items: center; gap: 5px; margin-bottom: 3px; }
     .cs-xp-track {
       flex: 1; height: 4px; background: rgba(0,0,0,0.5);
@@ -526,7 +532,7 @@ export class CharacterStatsPanelComponent implements OnInit {
   vitalityVal = computed(() => (this.stats()?.acmMetrics?.physicalVitality ?? 0) + this.vitalityBon());
   energyVal   = computed(() => (this.stats()?.acmMetrics?.pleasureCapacity ?? 0) + this.energyBon());
 
-  showClasses = signal<boolean>(false);
+  showClasses = signal<boolean>(true);
 
   // ── Derived character data ───────────────────────────────────────────────
   primaryClass = computed<SkillTreeStat | null>(() => {
@@ -586,12 +592,12 @@ export class CharacterStatsPanelComponent implements OnInit {
 
   rightStats = computed<{ label: string; value: string; cls: string }[]>(() => [
     { label: 'Sage Streak',    value: (this.stats()?.sageStreak ?? 0) + 'd', cls: 'sv-streak'  },
-    { label: 'Developer Lv',  value: String(this.classLevel('developer')),   cls: 'sv-dev'     },
-    { label: 'Warrior Lv',    value: String(this.classLevel('warrior')),     cls: 'sv-warrior' },
-    { label: 'Sage Lv',       value: String(this.classLevel('sage')),        cls: 'sv-sage'    },
-    { label: 'RedTeam Lv',    value: String(this.classLevel('redteamer')),   cls: 'sv-red'     },
-    { label: 'Artist Lv',     value: String(this.classLevel('artist')),      cls: 'sv-artist'  },
-    { label: 'Survivalist Lv',value: String(this.classLevel('survivalist')), cls: ''           },
+    { label: 'Developer Lv',  value: this.classLevelText('developer'),   cls: 'sv-dev'     },
+    { label: 'Warrior Lv',    value: this.classLevelText('warrior'),     cls: 'sv-warrior' },
+    { label: 'Sage Lv',       value: this.classLevelText('sage'),        cls: 'sv-sage'    },
+    { label: 'RedTeam Lv',    value: this.classLevelText('redteamer'),   cls: 'sv-red'     },
+    { label: 'Artist Lv',     value: this.classLevelText('artist'),      cls: 'sv-artist'  },
+    { label: 'Survivalist Lv',value: this.classLevelText('survivalist'), cls: ''           },
   ]);
 
   // ── Lifecycle ────────────────────────────────────────────────────────────
@@ -659,6 +665,17 @@ export class CharacterStatsPanelComponent implements OnInit {
 
   classLevel(id: string): number {
     return this.classes().find(c => c.id.toLowerCase() === id.toLowerCase())?.level ?? 0;
+  }
+
+  /** "750 XP to level 9", using the threshold already on the stats row. */
+  xpToNextLabel(cls: { level: number; currentXP: number; xpToNextLevel: number }): string {
+    return formatXpToNextLevel(cls.level, cls.currentXP, cls.xpToNextLevel);
+  }
+
+  classLevelText(id: string): string {
+    const cls = this.classes().find(c => c.id.toLowerCase() === id.toLowerCase());
+    if (!cls) return '0';
+    return `${cls.level} · ${this.xpToNextLabel(cls)}`;
   }
 
   spendPoint(attr: 'focus' | 'vitality' | 'energy'): void {

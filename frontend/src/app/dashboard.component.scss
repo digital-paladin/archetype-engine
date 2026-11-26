@@ -389,7 +389,9 @@
 }
 .eso-xp-class-info { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
 .eso-xp-class-name { font-family: 'Cinzel', serif; font-size: 12px; color: var(--eso-text, #e2cfa8); font-weight: 600; letter-spacing: 0.4px; }
-.eso-xp-totals     { display: flex; gap: 10px; align-items: center; }
+.eso-xp-totals     { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.eso-xp-level-badge { font-size: 12px; font-weight: 700; color: var(--eso-text, #e2cfa8); }
+.eso-xp-to-next    { font-size: 12px; color: var(--eso-gold, #c9a84c); letter-spacing: 0.02em; }
 .eso-xp-total-val  { color: var(--eso-gold, #c9a84c); font-size: 13px; font-weight: 700; }
 .eso-xp-daily-val  { color: var(--eso-text-dim, #a08858); font-size: 11px; }
 .eso-xp-projections{ display: flex; gap: 14px; }

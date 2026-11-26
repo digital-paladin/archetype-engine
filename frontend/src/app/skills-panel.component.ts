@@ -13,6 +13,7 @@ import {
   ALL_SKILLS, SKILL_BARS, COMBOS, SKILL_MAP,
   Skill, SkillBar, ComboDefinition, SkillCategory,
 } from './skill-tree.data';
+import { formatXpToNextLevel } from './quest-progress';
 
 const TIER_LABEL: Record<string, string> = {
   basic: 'I', intermediate: 'II', advanced: 'III', master: 'IV',
@@ -184,7 +185,8 @@ interface SkillTreeStat {
         <span class="sp-decay-icon">🎯</span>
         <div class="sp-decay-info">
           <span class="sp-decay-lbl">LVL {{ cls.level }} · {{ cls.tier | uppercase }}</span>
-          <span class="sp-decay-val">{{ cls.estimatedWeeksToLevel < 999 ? '~' + cls.estimatedWeeksToLevel + ' wks to level' : 'See sheet' }}</span>
+          <span class="sp-decay-val sp-decay-xp" data-testid="xp-to-next-level">{{ xpToNextLabel(cls) }}</span>
+          <span class="sp-decay-sub" *ngIf="cls.estimatedWeeksToLevel < 999">~{{ cls.estimatedWeeksToLevel }} wks</span>
         </div>
       </div>
     </div>
@@ -519,6 +521,10 @@ interface SkillTreeStat {
     .sp-decay-val {
       font-family: 'Cinzel', serif; font-size: 10px;
       color: rgba(201,168,76,0.75); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .sp-decay-xp { white-space: normal; }
+    .sp-decay-sub {
+      font-size: 9px; color: rgba(168,145,88,0.55); letter-spacing: 0.02em;
     }
 
     /* Scrollable abilities area */
@@ -889,6 +895,10 @@ export class SkillsPanelComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void { this.treeSub?.unsubscribe(); }
+
+  protected xpToNextLabel(cls: { level: number; currentXP: number; xpToNextLevel: number }): string {
+    return formatXpToNextLevel(cls.level, cls.currentXP, cls.xpToNextLevel);
+  }
 
   protected rustStatusIcon(status?: string): string {
     if (status === 'sharp')      return '✅';
